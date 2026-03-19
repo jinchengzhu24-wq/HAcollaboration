@@ -1,4 +1,4 @@
-from app.domain.models.session import ResearchSession
+from backend.domain.models.session import ResearchSession
 
 
 class InMemorySessionRepository:
@@ -10,4 +10,3 @@ class InMemorySessionRepository:
 
     def get(self, session_id: str) -> ResearchSession | None:
         return self._storage.get(session_id)
-

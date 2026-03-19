@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException
 
-from app.application.schemas.session import (
+from backend.application.schemas.session import (
     SessionAdvanceRequest,
     SessionCreateRequest,
     SessionResponse,
 )
-from app.application.services.orchestration_service import orchestration_service
+from backend.application.services.orchestration_service import orchestration_service
 
 router = APIRouter()
 
@@ -32,4 +32,3 @@ def advance_session(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
-

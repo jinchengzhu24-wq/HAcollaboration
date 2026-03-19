@@ -2,7 +2,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.domain.models.session import FocusArea, ResearchCycleStage
+from backend.domain.models.session import FocusArea, ResearchCycleStage
 
 
 class SessionCreateRequest(BaseModel):
@@ -38,4 +38,3 @@ class SessionResponse(BaseModel):
     guiding_questions: list[str]
     latest_draft: str | None = None
     state_snapshot: dict[str, Any] = Field(default_factory=dict)
-

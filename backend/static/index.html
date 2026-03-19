@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>行动研究对话台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <p class="brand-kicker">Action Research</p>
+          <h1>研究对话台</h1>
+          <p class="brand-copy">
+            左侧查看阶段，右侧像聊天一样推进整个行动研究过程。
+          </p>
+        </div>
+
+        <section class="sidebar-card setup-card">
+          <label class="field-label" for="project-title">项目标题</label>
+          <input
+            id="project-title"
+            class="text-input"
+            type="text"
+            placeholder="例如：英语课堂提问改进"
+          />
+          <p class="tiny-note">第一次发送消息时会用这个标题创建会话。</p>
+        </section>
+
+        <section class="sidebar-card status-card">
+          <p class="section-title">状态</p>
+          <div class="status-row">
+            <span class="status-dot"></span>
+            <span id="llm-status">等待创建会话</span>
+          </div>
+          <div class="meta-grid">
+            <div>
+              <p class="meta-label">当前轮次</p>
+              <p id="round-label" class="meta-value">尚未开始</p>
+            </div>
+            <div>
+              <p class="meta-label">剩余轮数</p>
+              <p id="rounds-left" class="meta-value">-</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="sidebar-card stage-card">
+          <div class="stage-header">
+            <p class="section-title">阶段</p>
+            <span id="stage-summary" class="stage-summary">先发送想法</span>
+          </div>
+          <ol id="stage-plan" class="stage-list">
+            <li class="stage-item pending">
+              <div class="stage-index">1</div>
+              <div class="stage-content">
+                <p class="stage-label">等待阶段规划</p>
+                <p class="stage-reason">发送第一条想法后，AI 会先给出分阶段方案。</p>
+              </div>
+            </li>
+          </ol>
+        </section>
+
+        <section id="plan-panel" class="sidebar-card plan-card hidden">
+          <p class="section-title">阶段确认</p>
+          <p class="tiny-note">AI 已经给出阶段规划。你可以直接确认，或要求重新调整。</p>
+          <div class="plan-actions">
+            <button id="confirm-plan" class="primary-button" type="button">确认阶段安排</button>
+            <button id="toggle-adjust" class="ghost-button" type="button">调整安排</button>
+          </div>
+          <div id="adjustment-box" class="adjustment-box hidden">
+            <textarea
+              id="adjustment-text"
+              class="text-area"
+              rows="4"
+              placeholder="例如：我想先谈课堂问题，再谈文献；或者压缩成 3 个阶段。"
+            ></textarea>
+            <button id="submit-adjustment" class="secondary-button" type="button">提交调整意见</button>
+          </div>
+        </section>
+      </aside>
+
+      <main class="chat-layout">
+        <header class="chat-header">
+          <div>
+            <p class="chat-header-kicker">AI Facilitator</p>
+            <h2>行动研究分阶段对话</h2>
+          </div>
+          <div id="question-chip" class="question-chip">先输入你的研究想法开始对话</div>
+        </header>
+
+        <section id="chat-feed" class="chat-feed">
+          <div class="empty-state">
+            <h3>从一个研究想法开始</h3>
+            <p>
+              你发出第一条消息后，AI 会先理解你的主题，再给出阶段拆分方案，并请你确认是否合理。
+            </p>
+          </div>
+        </section>
+
+        <form id="chat-form" class="composer">
+          <textarea
+            id="chat-input"
+            class="composer-input"
+            rows="1"
+            placeholder="先说说你现在的研究想法，或者回答当前这一轮的问题。"
+          ></textarea>
+          <button id="send-button" class="send-button" type="submit">发送</button>
+        </form>
+      </main>
+    </div>
+
+    <template id="bubble-template">
+      <article class="bubble-row">
+        <div class="avatar"></div>
+        <div class="bubble"></div>
+      </article>
+    </template>
+
+    <script src="/static/app.js"></script>
+  </body>
+  </html>

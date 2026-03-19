@@ -1,13 +1,13 @@
 from uuid import uuid4
 
-from app.application.schemas.session import (
+from backend.application.schemas.session import (
     SessionAdvanceRequest,
     SessionCreateRequest,
     SessionResponse,
 )
-from app.domain.models.session import FocusArea, ResearchCycleStage, ResearchSession
-from app.domain.services.prioritization import PrioritizationService
-from app.infrastructure.repositories.session_repository import InMemorySessionRepository
+from backend.domain.models.session import FocusArea, ResearchCycleStage, ResearchSession
+from backend.domain.services.prioritization import PrioritizationService
+from backend.infrastructure.repositories.session_repository import InMemorySessionRepository
 
 
 class OrchestrationService:
@@ -78,4 +78,3 @@ class OrchestrationService:
 
 
 orchestration_service = OrchestrationService()
-
