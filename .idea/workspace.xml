@@ -1,39 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="f21518fc-789d-49ad-aaf5-6e7337d994c8" name="更改" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/api/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/api/router.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/api/routes/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/api/routes/health.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/api/routes/sessions.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/application/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/application/schemas/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/application/schemas/session.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/application/services/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/application/services/orchestration_service.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/core/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/core/config.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/domain/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/domain/models/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/domain/models/session.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/domain/services/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/domain/services/prioritization.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/infrastructure/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/infrastructure/llm/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/infrastructure/llm/client.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/infrastructure/llm/prompt_builder.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/infrastructure/persistence/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/infrastructure/repositories/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/infrastructure/repositories/session_repository.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/main.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_health.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_health.py" afterDir="false" />
-    </list>
+    <list default="true" id="f21518fc-789d-49ad-aaf5-6e7337d994c8" name="更改" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -87,7 +55,7 @@
       <workItem from="1773891517743" duration="8000" />
       <workItem from="1773891533126" duration="153000" />
       <workItem from="1773891693716" duration="664000" />
-      <workItem from="1773893092985" duration="4097000" />
+      <workItem from="1773893092985" duration="4397000" />
     </task>
     <servers />
   </component>
