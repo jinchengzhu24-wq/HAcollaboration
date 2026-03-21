@@ -6,4 +6,4 @@ venv/
 .env
 *.pyc
 data/*.db
-
+data/stage_docs/

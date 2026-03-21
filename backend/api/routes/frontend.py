@@ -5,10 +5,9 @@ from fastapi.responses import FileResponse
 
 router = APIRouter()
 
-STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
+FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"
 
 
 @router.get("/", include_in_schema=False)
 def serve_frontend() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
-
+    return FileResponse(FRONTEND_DIR / "index.html")
