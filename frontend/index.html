@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -9,106 +9,39 @@
   <body>
     <div class="app-shell">
       <aside class="sidebar">
-        <div class="brand-block">
-          <p class="brand-kicker">Action Research</p>
-          <h1>Action Research Assistant</h1>
-          <p class="brand-copy">A compact workspace for stage dialogue and document review.</p>
-        </div>
-
-        <section class="sidebar-card guide-card">
-          <p class="section-title">How It Works</p>
-          <ol class="guide-list">
-            <li>Start with a project idea.</li>
-            <li>Confirm or revise the stage plan.</li>
-            <li>Answer the stage questions.</li>
-            <li>Review the docx, then continue.</li>
-          </ol>
-        </section>
-
-        <section class="sidebar-card setup-card">
-          <label class="field-label" for="project-title">Project Title</label>
-          <input
-            id="project-title"
-            class="text-input"
-            type="text"
-            placeholder="Example: Improving classroom questioning"
-          />
-          <p class="tiny-note">Optional. Used when the session is created.</p>
-        </section>
-
-        <section class="sidebar-card status-card">
-          <p class="section-title">Status</p>
-          <div class="status-row">
-            <span class="status-dot"></span>
-            <span id="llm-status">Waiting to create a session</span>
-          </div>
-          <div class="meta-grid">
-            <div>
-              <p class="meta-label">Current Round</p>
-              <p id="round-label" class="meta-value">Not started</p>
-            </div>
-            <div>
-              <p class="meta-label">Stages Left</p>
-              <p id="rounds-left" class="meta-value">-</p>
-            </div>
-          </div>
-        </section>
-
         <section class="sidebar-card stage-card">
           <div class="stage-header">
             <p class="section-title">Stages</p>
-            <span id="stage-summary" class="stage-summary">Send your first idea</span>
+            <span id="stage-summary" class="stage-summary">准备开始</span>
           </div>
           <ol id="stage-plan" class="stage-list">
             <li class="stage-item pending">
               <div class="stage-index">1</div>
               <div class="stage-content">
-                <p class="stage-label">Waiting for stage planning</p>
-                <p class="stage-reason">
-                  After your first message, the assistant will propose a stage plan.
-                </p>
+                <p class="stage-label">等待开始</p>
+                <p class="stage-reason">先抛出你的大致想法，Stage 1 会出现在这里。</p>
               </div>
             </li>
           </ol>
-        </section>
-
-        <section id="plan-panel" class="sidebar-card plan-card hidden">
-          <p class="section-title">Plan Review</p>
-          <p class="tiny-note">Accept the suggested plan or request a revision.</p>
-          <div class="plan-actions">
-            <button id="confirm-plan" class="primary-button" type="button">Confirm Plan</button>
-            <button id="toggle-adjust" class="ghost-button" type="button">Request Changes</button>
-          </div>
-          <div id="adjustment-box" class="adjustment-box hidden">
-            <textarea
-              id="adjustment-text"
-              class="text-area"
-              rows="4"
-              placeholder="Example: Please discuss the classroom problem before the literature review."
-            ></textarea>
-            <button id="submit-adjustment" class="secondary-button" type="button">
-              Submit Changes
-            </button>
-          </div>
+          <button id="continue-stage-button" class="secondary-button" type="button">
+            Confirm
+          </button>
         </section>
       </aside>
 
       <main class="chat-layout">
         <header class="chat-header">
           <div>
-            <p class="chat-header-kicker">Conversation</p>
-            <h2>Stage Dialogue</h2>
+            <p class="chat-header-kicker">对话区</p>
+            <h2>分阶段对话</h2>
           </div>
-          <div id="question-chip" class="question-chip">Start by entering your research idea.</div>
+          <div id="question-chip" class="question-chip">Start with your idea. We will move one stage at a time.</div>
         </header>
 
         <section id="chat-feed" class="chat-feed">
           <div class="empty-state">
-            <h3>Start with one idea</h3>
-            <p>
-              Once you send the first message, the assistant will propose a stage plan and then
-              guide the conversation step by step.
-            </p>
+            <h3>先说一个想法</h3>
+            <p>你先说个大概想法，我会先简短回应，然后从 Stage 1 开始。</p>
           </div>
         </section>
 
@@ -117,38 +50,35 @@
             id="chat-input"
             class="composer-input"
             rows="1"
-            placeholder="Type your idea or answer the current stage questions."
+            placeholder="输入你的想法，或者直接回答当前这两个问题。"
           ></textarea>
-          <button id="send-button" class="send-button" type="submit">Send</button>
+          <button id="send-button" class="send-button" type="submit">发送</button>
         </form>
       </main>
 
       <aside class="doc-panel">
         <div class="doc-card">
           <div class="doc-toolbar">
-            <select id="doc-selector" class="doc-selector" aria-label="Stage document selector">
-              <option value="">No documents yet</option>
+            <select id="doc-selector" class="doc-selector" aria-label="阶段文稿选择器">
+              <option value="">暂无文稿</option>
             </select>
-            <span id="doc-status-pill" class="doc-status-pill">Not Ready</span>
+            <span id="doc-status-pill" class="doc-status-pill">未就绪</span>
           </div>
 
           <div class="doc-preview-wrap">
             <div class="doc-editor-header">
-              <span id="doc-editor-status" class="doc-editor-status">Read only</span>
+              <span id="doc-editor-status" class="doc-editor-status">只读</span>
             </div>
-            <textarea id="doc-preview" class="doc-preview" rows="18">No document content yet.</textarea>
+            <textarea id="doc-preview" class="doc-preview" rows="18">右侧会显示当前阶段文稿。</textarea>
           </div>
 
           <div class="doc-actions">
-            <button id="save-doc-button" class="primary-button" type="button">Save</button>
+            <button id="save-doc-button" class="primary-button" type="button">保存</button>
             <a id="download-doc" class="secondary-link disabled" href="#" target="_blank" rel="noreferrer">
-              Download
+              下载
             </a>
-            <button id="continue-stage-button" class="secondary-button" type="button">
-              Continue
-            </button>
             <label class="upload-compact">
-              <span>Import docx</span>
+              <span>导入 docx</span>
               <input id="doc-upload" type="file" accept=".docx" />
             </label>
           </div>

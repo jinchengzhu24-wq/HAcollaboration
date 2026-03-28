@@ -69,8 +69,6 @@ def update_stage_plan(session_id: str, payload: DialoguePlanRequest) -> Dialogue
 @router.post("/sessions/{session_id}/turn", response_model=DialogueTurnResponse)
 def advance_dialogue(session_id: str, payload: DialogueTurnRequest) -> DialogueTurnResponse:
     session = _get_session_or_404(session_id)
-    if not session.state_snapshot.get("plan_confirmed"):
-        raise HTTPException(status_code=400, detail="Please confirm the stage plan first")
     try:
         reply = dialogue_service.advance_session(session, payload.answers, payload.latest_input)
     except ValueError as exc:

@@ -5,36 +5,36 @@ class PrioritizationService:
     """Chooses what the system should advance next."""
 
     _FOCUS_LABELS = {
-        FocusArea.MIND_MAP: "思维导图",
-        FocusArea.SUMMARY: "摘要总结",
-        FocusArea.PRACTICE_PROBLEM: "实践问题",
-        FocusArea.LITERATURE_EVIDENCE: "文献依据",
-        FocusArea.RESEARCH_PROBLEM: "研究问题",
-        FocusArea.EXPECTED_OUTCOME: "预期成果",
-        FocusArea.INTERVENTION_PLAN: "干预计划",
-        FocusArea.DATA_COLLECTION_AND_REFLECTION: "资料收集与反思",
+        FocusArea.MIND_MAP: "Concept Map",
+        FocusArea.SUMMARY: "Working Summary",
+        FocusArea.PRACTICE_PROBLEM: "Practice Problem",
+        FocusArea.LITERATURE_EVIDENCE: "Literature Support",
+        FocusArea.RESEARCH_PROBLEM: "Research Problem",
+        FocusArea.EXPECTED_OUTCOME: "Expected Outcome",
+        FocusArea.INTERVENTION_PLAN: "Intervention Plan",
+        FocusArea.DATA_COLLECTION_AND_REFLECTION: "Evidence and Reflection",
     }
 
     _FOCUS_REASONS = {
-        FocusArea.MIND_MAP: "先把核心概念和它们之间的关系理清，后续写作会更稳定。",
-        FocusArea.SUMMARY: "当前已经积累了一些要点，适合先压缩成一版可继续修改的摘要。",
-        FocusArea.PRACTICE_PROBLEM: "行动研究首先要落在真实、可观察的教学问题上。",
-        FocusArea.LITERATURE_EVIDENCE: "把问题和前人研究连接起来，论证会更扎实。",
-        FocusArea.RESEARCH_PROBLEM: "先把研究问题说准，后续目标、干预和评估才容易对齐。",
-        FocusArea.EXPECTED_OUTCOME: "先明确希望看到什么变化，后面才好判断行动是否有效。",
-        FocusArea.INTERVENTION_PLAN: "问题和目标初步明确后，应尽快落实到可执行的教学行动。",
-        FocusArea.DATA_COLLECTION_AND_REFLECTION: "想形成研究闭环，就需要提前想清楚证据与反思方式。",
+        FocusArea.MIND_MAP: "It helps us sort the core ideas and how they connect before we write anything longer.",
+        FocusArea.SUMMARY: "You already have some useful material, so it makes sense to compress it into a cleaner working version.",
+        FocusArea.PRACTICE_PROBLEM: "Action research works best when it starts from a specific classroom problem that can be observed.",
+        FocusArea.LITERATURE_EVIDENCE: "Linking the problem to existing research will make the logic and justification more solid.",
+        FocusArea.RESEARCH_PROBLEM: "If we sharpen the research problem first, the goals, intervention, and evaluation will line up much more easily.",
+        FocusArea.EXPECTED_OUTCOME: "It helps to name the change you want to see before we decide whether the action is working.",
+        FocusArea.INTERVENTION_PLAN: "Once the problem is clear enough, we should turn it into a concrete teaching move or action plan.",
+        FocusArea.DATA_COLLECTION_AND_REFLECTION: "Thinking about evidence and reflection early will make the next cycle much easier to run.",
     }
 
     _FOCUS_GUIDANCE = {
-        FocusArea.MIND_MAP: "可以先列出研究对象、课堂现象、可能原因、干预策略和预期变化，再整理它们的关系。",
-        FocusArea.SUMMARY: "可以先写一个短版摘要，包含问题、目标、行动和预期证据，后面再逐步精炼语言。",
-        FocusArea.PRACTICE_PROBLEM: "建议先把问题描述得具体、可观察，尽量落到某类课堂表现，而不是停留在泛泛判断。",
-        FocusArea.LITERATURE_EVIDENCE: "可以先找两三类最相关的理论或研究方向，用来支撑你对问题成因和干预价值的判断。",
-        FocusArea.RESEARCH_PROBLEM: "建议先把研究问题收窄到一个明确场景、一个核心对象和一种可观察变化。",
-        FocusArea.EXPECTED_OUTCOME: "可以先区分短期变化和观察指标，比如参与人数、回答质量、任务完成度等。",
-        FocusArea.INTERVENTION_PLAN: "建议先把干预写成可执行步骤，包括对象、频率、周期和课堂中的具体做法。",
-        FocusArea.DATA_COLLECTION_AND_REFLECTION: "可以先确定两三种最容易实施的证据来源，再配一个反思问题帮助进入下一轮修订。",
+        FocusArea.MIND_MAP: "Start by listing the learners, the classroom pattern, likely causes, possible actions, and the change you hope to see.",
+        FocusArea.SUMMARY: "Try a short version first that covers the problem, the goal, the action, and the evidence you expect to collect.",
+        FocusArea.PRACTICE_PROBLEM: "Keep the problem concrete and observable, and anchor it in one clear classroom situation.",
+        FocusArea.LITERATURE_EVIDENCE: "Pick two or three theories or research strands that directly support your reading of the problem.",
+        FocusArea.RESEARCH_PROBLEM: "Try to narrow the problem to one setting, one learner group, and one visible change you want to study.",
+        FocusArea.EXPECTED_OUTCOME: "Separate the change you hope for from the signs you can actually observe in class.",
+        FocusArea.INTERVENTION_PLAN: "Write the intervention as a sequence of teachable steps, including who, when, and how it will happen.",
+        FocusArea.DATA_COLLECTION_AND_REFLECTION: "Pick two or three easy evidence sources first, then add one reflection question for the next round.",
     }
 
     _STATE_KEYS = {
@@ -58,20 +58,22 @@ class PrioritizationService:
     ]
 
     _KEYWORDS = {
-        FocusArea.MIND_MAP: ("思维导图", "脑图", "mind map"),
-        FocusArea.SUMMARY: ("摘要", "总结", "概述", "summary"),
-        FocusArea.PRACTICE_PROBLEM: ("实践问题", "课堂问题", "痛点", "困境", "problem"),
-        FocusArea.LITERATURE_EVIDENCE: ("文献", "理论", "研究依据", "参考文献", "literature"),
-        FocusArea.RESEARCH_PROBLEM: ("研究问题", "研究主题", "我想研究", "问题是"),
-        FocusArea.EXPECTED_OUTCOME: ("预期成果", "目标", "期望", "希望达到", "outcome"),
-        FocusArea.INTERVENTION_PLAN: ("干预", "方案", "策略", "行动计划", "intervention"),
+        FocusArea.MIND_MAP: ("mind map", "concept map", "思维导图", "脑图"),
+        FocusArea.SUMMARY: ("summary", "overview", "摘要", "总结", "概述"),
+        FocusArea.PRACTICE_PROBLEM: ("problem", "issue", "challenge", "实践问题", "课堂问题", "痛点"),
+        FocusArea.LITERATURE_EVIDENCE: ("literature", "theory", "research support", "文献", "理论", "研究依据"),
+        FocusArea.RESEARCH_PROBLEM: ("research problem", "research question", "研究问题", "研究主题"),
+        FocusArea.EXPECTED_OUTCOME: ("outcome", "goal", "target", "expected outcome", "预期成果", "目标"),
+        FocusArea.INTERVENTION_PLAN: ("intervention", "plan", "strategy", "行动计划", "干预", "方案"),
         FocusArea.DATA_COLLECTION_AND_REFLECTION: (
+            "data",
+            "evidence",
+            "reflection",
+            "observation",
             "数据",
-            "资料收集",
+            "证据",
             "观察",
             "反思",
-            "证据",
-            "reflection",
         ),
     }
 
@@ -119,36 +121,36 @@ class PrioritizationService:
     def default_questions(self, focus_area: FocusArea) -> list[str]:
         prompts = {
             FocusArea.MIND_MAP: [
-                "你觉得这个研究里最核心的 3 到 5 个概念分别是什么？",
-                "这些概念之间最重要的关系是什么？",
+                "What are the three to five core ideas in this project?",
+                "Which relationships between those ideas matter most right now?",
             ],
             FocusArea.SUMMARY: [
-                "如果用两三句话概括你当前的研究设想，你最想保留哪些信息？",
-                "和上一版相比，这次最重要的新变化是什么？",
+                "If you had to explain the project in two or three sentences, what would you keep?",
+                "Compared with the last version, what feels most important now?",
             ],
             FocusArea.PRACTICE_PROBLEM: [
-                "你在课堂或教学实践中最想解决的具体现象是什么？",
-                "你已经观察到哪些例子或证据，说明这个问题值得优先研究？",
+                "What classroom pattern or teaching problem do you most want to work on?",
+                "What have you already seen that tells you this problem is worth studying?",
             ],
             FocusArea.LITERATURE_EVIDENCE: [
-                "你希望借助哪些理论、作者或研究方向来支撑这个项目？",
-                "当前最需要文献支持的观点或判断是什么？",
+                "Which theories, authors, or research strands feel most relevant here?",
+                "What claim or judgment in your project most needs research support?",
             ],
             FocusArea.RESEARCH_PROBLEM: [
-                "请用尽量具体的一句话说出你想研究的教学或学习问题。",
-                "这个问题为什么对你现在的教学场景很重要？",
+                "Can you say your research problem in one concrete sentence?",
+                "Why does this problem matter in your current teaching context?",
             ],
             FocusArea.EXPECTED_OUTCOME: [
-                "如果这次行动有效，你最希望学生、课堂或教学方式发生什么变化？",
-                "你打算用什么现象来判断这种变化已经出现？",
+                "If this action works, what change do you most hope to see?",
+                "What would tell you that the change is actually happening?",
             ],
             FocusArea.INTERVENTION_PLAN: [
-                "你准备采取什么具体行动或教学策略来回应这个问题？",
-                "这个行动准备在哪个班级、什么时间范围内实施？",
+                "What specific teaching move or intervention are you considering?",
+                "Where, when, and with whom do you plan to try it?",
             ],
             FocusArea.DATA_COLLECTION_AND_REFLECTION: [
-                "你准备收集哪些资料来观察这次行动是否产生效果？",
-                "下一轮反思时，你最想追问自己的一个问题是什么？",
+                "What evidence will you collect to see whether the action is working?",
+                "What is one reflection question you want to carry into the next round?",
             ],
         }
         return prompts[focus_area]

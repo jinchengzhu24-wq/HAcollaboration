@@ -100,6 +100,34 @@ def test_stage_document_editor_flow() -> None:
     assert len(continue_data["current_questions"]) == 2
 
 
+def test_stage_documents_accumulate_across_stages() -> None:
+    client = TestClient(app)
+    session_id, _ = _complete_first_stage(client)
+
+    continue_response = client.post(f"/dialogue/sessions/{session_id}/continue")
+    assert continue_response.status_code == 200
+
+    second_turn_response = client.post(
+        f"/dialogue/sessions/{session_id}/turn",
+        json={
+            "answers": [
+                "I plan to model better follow-up prompts during reading discussions.",
+                "I will try this first in one grade seven class next week.",
+            ],
+            "latest_input": "I also want to note how students respond after the prompt change.",
+        },
+    )
+    assert second_turn_response.status_code == 200
+    second_turn_data = second_turn_response.json()
+    preview_text = second_turn_data["current_document"]["preview_text"]
+
+    assert "Stage 1 -" in preview_text
+    assert "Stage 2 -" in preview_text
+    assert "grade seven" in preview_text
+    assert "follow-up prompts" in preview_text
+    assert "\n\nStage 2" in preview_text
+
+
 def _complete_first_stage(client: TestClient) -> tuple[str, dict]:
     create_response = client.post(
         "/dialogue/sessions",
@@ -112,9 +140,10 @@ def _complete_first_stage(client: TestClient) -> tuple[str, dict]:
     session_data = create_response.json()
     session_id = session_data["session_id"]
     assert session_data["stage_documents"] == []
-
-    confirm_response = client.post(f"/dialogue/sessions/{session_id}/plan", json={"confirmed": True})
-    assert confirm_response.status_code == 200
+    assert session_data["plan_confirmed"] is True
+    assert len(session_data["current_questions"]) == 2
+    assert "Stage 1" in session_data["opening_message"]
+    assert "Stage 2" not in session_data["opening_message"]
 
     turn_response = client.post(
         f"/dialogue/sessions/{session_id}/turn",
@@ -127,4 +156,7 @@ def _complete_first_stage(client: TestClient) -> tuple[str, dict]:
         },
     )
     assert turn_response.status_code == 200
-    return session_id, turn_response.json()
+    turn_data = turn_response.json()
+    assert "AI阶段总结" not in turn_data["current_document"]["preview_text"]
+    assert "用户回答" not in turn_data["current_document"]["preview_text"]
+    return session_id, turn_data

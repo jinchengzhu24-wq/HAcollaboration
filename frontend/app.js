@@ -1,6 +1,7 @@
 const state = {
   sessionId: null,
   planConfirmed: false,
+  fullStagePlan: [],
   currentQuestions: [],
   awaitingDocumentReview: false,
   activeStageNumber: null,
@@ -15,11 +16,7 @@ const state = {
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
-const projectTitleInput = document.getElementById("project-title");
 const chatFeed = document.getElementById("chat-feed");
-const confirmPlanButton = document.getElementById("confirm-plan");
-const toggleAdjustButton = document.getElementById("toggle-adjust");
-const submitAdjustmentButton = document.getElementById("submit-adjustment");
 const saveDocButton = document.getElementById("save-doc-button");
 const continueStageButton = document.getElementById("continue-stage-button");
 const docPreviewInput = document.getElementById("doc-preview");
@@ -27,15 +24,15 @@ const docSelector = document.getElementById("doc-selector");
 const docUploadInput = document.getElementById("doc-upload");
 
 chatForm.addEventListener("submit", handleChatSubmit);
-confirmPlanButton.addEventListener("click", handleConfirmPlan);
-toggleAdjustButton.addEventListener("click", toggleAdjustmentBox);
-submitAdjustmentButton.addEventListener("click", handleAdjustPlan);
 saveDocButton.addEventListener("click", handleSaveEditorChanges);
 continueStageButton.addEventListener("click", handleContinueStage);
 chatInput.addEventListener("input", autoGrowComposer);
 docPreviewInput.addEventListener("input", handleEditorInput);
 docSelector.addEventListener("change", handleDocumentSelectionChange);
 docUploadInput.addEventListener("change", handleUploadDocument);
+
+updateDocumentPanel();
+updateStagePlan();
 
 async function handleChatSubmit(event) {
   event.preventDefault();
@@ -47,13 +44,8 @@ async function handleChatSubmit(event) {
     return;
   }
 
-  if (!state.planConfirmed) {
-    window.alert("Please confirm the stage plan first, or submit a revision request.");
-    return;
-  }
-
   if (state.awaitingDocumentReview) {
-    window.alert("Please review the current stage document on the right before continuing.");
+    window.alert("先看一下右边文稿，再决定要不要继续下一阶段。");
     return;
   }
 
@@ -71,90 +63,20 @@ async function createSession(initialIdea) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         initial_idea: initialIdea,
-        project_title: projectTitleInput.value.trim() || null,
+        project_title: null,
       }),
     });
-    if (!response.ok) throw new Error("Failed to create session");
+    if (!response.ok) throw new Error("创建会话失败");
 
     const data = await response.json();
     applySessionState(data);
     updateMeta(data.llm_status, data.current_round_label, data.remaining_rounds);
-    updateQuestionChip("Review the stage plan on the left, then confirm or revise it.");
-    updateStagePlan(data.stage_plan);
-    updateDocumentPanel();
-    showPlanPanel(true);
-    appendBubble("ai", data.opening_message);
-  } catch (error) {
-    appendBubble("ai", `Error while creating the session: ${error.message}`);
-  }
-}
-
-async function handleConfirmPlan() {
-  if (!state.sessionId) return;
-
-  try {
-    const response = await fetch(`/dialogue/sessions/${state.sessionId}/plan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirmed: true }),
-    });
-    if (!response.ok) throw new Error("Failed to confirm the plan");
-
-    const data = await response.json();
-    applyPlanState(data);
-    updateMeta(
-      document.getElementById("llm-status").textContent,
-      data.current_round_label,
-      data.remaining_rounds,
-    );
-    updateStagePlan(data.stage_plan);
-    updateDocumentPanel();
     updateQuestionChip(formatQuestions(data.current_questions));
-    appendBubble("ai", `${data.message}\n\nQuestions for this stage:\n${formatQuestions(data.current_questions, true)}`);
-    showPlanPanel(false);
-  } catch (error) {
-    appendBubble("ai", `Plan confirmation failed: ${error.message}`);
-  }
-}
-
-async function handleAdjustPlan() {
-  if (!state.sessionId) return;
-
-  const adjustmentText = document.getElementById("adjustment-text").value.trim();
-  if (!adjustmentText) {
-    window.alert("Please describe how you want the stage plan to change.");
-    return;
-  }
-
-  appendBubble("user", `I want to revise the stage plan:\n${adjustmentText}`);
-
-  try {
-    const response = await fetch(`/dialogue/sessions/${state.sessionId}/plan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        confirmed: false,
-        adjustment_text: adjustmentText,
-      }),
-    });
-    if (!response.ok) throw new Error("Failed to revise the plan");
-
-    const data = await response.json();
-    applyPlanState(data);
-    updateMeta(
-      document.getElementById("llm-status").textContent,
-      data.current_round_label,
-      data.remaining_rounds,
-    );
     updateStagePlan(data.stage_plan);
     updateDocumentPanel();
-    updateQuestionChip(formatQuestions(data.current_questions));
-    appendBubble("ai", `${data.message}\n\nQuestions for this stage:\n${formatQuestions(data.current_questions, true)}`);
-    document.getElementById("adjustment-text").value = "";
-    document.getElementById("adjustment-box").classList.add("hidden");
-    showPlanPanel(false);
+    appendBubble("ai", buildQuestionsMessage(data.opening_message, data.current_questions));
   } catch (error) {
-    appendBubble("ai", `Plan revision failed: ${error.message}`);
+    appendBubble("ai", `Something went wrong while starting the session: ${error.message}`);
   }
 }
 
@@ -172,55 +94,37 @@ async function submitTurn(rawMessage) {
         latest_input: parsed.latestInput,
       }),
     });
-    if (!response.ok) throw new Error("Failed to submit this stage response");
+    if (!response.ok) throw new Error("提交这一轮内容失败");
 
     const data = await response.json();
     applyTurnState(data);
-    updateMeta(
-      document.getElementById("llm-status").textContent,
-      data.current_round_label,
-      data.remaining_rounds,
-    );
+    updateMeta(null, data.current_round_label, data.remaining_rounds);
     updateStagePlan();
     updateDocumentPanel();
-
-    const aiMessage = [
-      data.message,
-      "",
-      "Stage Feedback:",
-      data.stage_feedback,
-      "",
-      "Guidance:",
-      data.guidance,
-      "",
-      "Stage Draft:",
-      data.draft,
-    ].join("\n");
-    appendBubble("ai", aiMessage);
+    appendBubble("ai", buildStageReplyMessage(data));
 
     if (data.is_complete) {
       updateQuestionChip("All stages are complete.");
-      appendBubble("ai", `Final Summary:\n${data.final_summary || ""}`);
+      if (data.final_summary) {
+        appendBubble("ai", `Here is the final wrap-up:\n${data.final_summary}`);
+      }
       return;
     }
 
     if (data.awaiting_document_review) {
-      updateQuestionChip("Review the docx on the right, then continue to the next stage.");
+      updateQuestionChip("The draft on the right is ready. Click Confirm when you want the next stage.");
     } else {
       updateQuestionChip(formatQuestions(data.next_questions));
     }
   } catch (error) {
-    appendBubble("ai", `Stage submission failed: ${error.message}`);
+    appendBubble("ai", `This stage response could not be submitted: ${error.message}`);
   }
 }
 
 async function handleUploadDocument() {
   const selectedDoc = getSelectedDocument();
   if (!state.sessionId || !selectedDoc) return;
-
-  if (!docUploadInput.files || !docUploadInput.files.length) {
-    return;
-  }
+  if (!docUploadInput.files || !docUploadInput.files.length) return;
 
   const formData = new FormData();
   formData.append("file", docUploadInput.files[0]);
@@ -230,7 +134,7 @@ async function handleUploadDocument() {
       `/dialogue/sessions/${state.sessionId}/documents/${selectedDoc.stage_index}/upload`,
       { method: "POST", body: formData },
     );
-    if (!response.ok) throw new Error("Failed to upload the revised document");
+    if (!response.ok) throw new Error("上传修订文稿失败");
 
     const data = await response.json();
     syncDocumentState(data.current_document, data.stage_documents || [], {
@@ -249,11 +153,11 @@ async function handleUploadDocument() {
 async function handleContinueStage() {
   if (!state.sessionId) return;
   if (state.editorDirty) {
-    window.alert("Please save your editor changes before continuing.");
+    window.alert("先把右边的修改保存一下，再继续。");
     return;
   }
   if (!isLatestDocumentSelected()) {
-    window.alert("Please switch back to the latest stage document before continuing.");
+    window.alert("请先切回最新阶段的文稿，再继续。");
     return;
   }
 
@@ -261,7 +165,7 @@ async function handleContinueStage() {
     const response = await fetch(`/dialogue/sessions/${state.sessionId}/continue`, {
       method: "POST",
     });
-    if (!response.ok) throw new Error("Failed to continue to the next stage");
+    if (!response.ok) throw new Error("推进到下一阶段失败");
 
     const data = await response.json();
     state.awaitingDocumentReview = data.awaiting_document_review;
@@ -270,17 +174,13 @@ async function handleContinueStage() {
     state.currentQuestions = data.current_questions || [];
     syncDocumentState(data.current_document, data.stage_documents || []);
 
-    updateMeta(
-      document.getElementById("llm-status").textContent,
-      data.current_round_label,
-      data.remaining_rounds,
-    );
+    updateMeta(null, data.current_round_label, data.remaining_rounds);
     updateStagePlan();
     updateDocumentPanel();
     updateQuestionChip(formatQuestions(data.current_questions));
-    appendBubble("ai", `${data.message}\n\nQuestions for this stage:\n${formatQuestions(data.current_questions, true)}`);
+    appendBubble("ai", buildQuestionsMessage(data.message, data.current_questions));
   } catch (error) {
-    appendBubble("ai", `Could not continue: ${error.message}`);
+    appendBubble("ai", `We cannot move to the next stage yet: ${error.message}`);
   }
 }
 
@@ -290,7 +190,7 @@ async function handleSaveEditorChanges() {
 
   const content = docPreviewInput.value.trim();
   if (!content) {
-    window.alert("The document editor cannot be empty.");
+    window.alert("右边文稿不能是空的。");
     return;
   }
 
@@ -303,7 +203,7 @@ async function handleSaveEditorChanges() {
         body: JSON.stringify({ content }),
       },
     );
-    if (!response.ok) throw new Error("Failed to save the editor changes");
+    if (!response.ok) throw new Error("保存编辑内容失败");
 
     const data = await response.json();
     syncDocumentState(data.current_document, data.stage_documents || [], {
@@ -314,27 +214,19 @@ async function handleSaveEditorChanges() {
     updateDocumentPanel();
     appendBubble("ai", data.message);
   } catch (error) {
-    appendBubble("ai", `Saving editor changes failed: ${error.message}`);
+    appendBubble("ai", `Saving the draft failed: ${error.message}`);
   }
 }
 
 function applySessionState(data) {
   state.sessionId = data.session_id;
   state.planConfirmed = data.plan_confirmed;
+  state.fullStagePlan = Array.isArray(data.stage_plan) ? data.stage_plan : [];
   state.currentQuestions = data.current_questions || [];
   state.awaitingDocumentReview = data.awaiting_document_review;
   state.activeStageNumber = data.active_stage_number;
   state.completedStageCount = data.completed_stage_count || 0;
   state.isComplete = data.is_complete;
-  syncDocumentState(data.current_document, data.stage_documents || []);
-}
-
-function applyPlanState(data) {
-  state.planConfirmed = data.plan_confirmed;
-  state.currentQuestions = data.current_questions || [];
-  state.awaitingDocumentReview = data.awaiting_document_review;
-  state.activeStageNumber = data.active_stage_number;
-  state.completedStageCount = data.completed_stage_count || 0;
   syncDocumentState(data.current_document, data.stage_documents || []);
 }
 
@@ -348,32 +240,56 @@ function applyTurnState(data) {
 }
 
 function updateMeta(llmStatus, roundLabel, remainingRounds) {
-  document.getElementById("llm-status").textContent = llmStatus;
-  document.getElementById("round-label").textContent = roundLabel;
-  document.getElementById("rounds-left").textContent = String(remainingRounds);
+  const llmStatusEl = document.getElementById("llm-status");
+  const roundLabelEl = document.getElementById("round-label");
+  const roundsLeftEl = document.getElementById("rounds-left");
+
+  if (llmStatusEl && llmStatus !== null && llmStatus !== undefined) {
+    llmStatusEl.textContent = llmStatus;
+  }
+  if (roundLabelEl) {
+    roundLabelEl.textContent = roundLabel;
+  }
+  if (roundsLeftEl) {
+    roundsLeftEl.textContent = String(remainingRounds);
+  }
 }
 
 function updateStagePlan(stagePlan = null) {
-  const stageList = document.getElementById("stage-plan");
-
-  if (Array.isArray(stagePlan) && stagePlan.length) {
-    stageList.innerHTML = "";
-    stagePlan.forEach((stage) => {
-      const item = document.createElement("li");
-      item.className = "stage-item pending";
-      item.dataset.index = String(stage.index);
-      item.innerHTML = `
-        <div class="stage-index">${stage.index}</div>
-        <div class="stage-content">
-          <p class="stage-label">${stage.label}</p>
-          <p class="stage-reason">${stage.reason}</p>
-        </div>
-      `;
-      stageList.appendChild(item);
-    });
+  if (Array.isArray(stagePlan)) {
+    state.fullStagePlan = stagePlan;
   }
 
-  const items = Array.from(stageList.querySelectorAll(".stage-item"));
+  const stageList = document.getElementById("stage-plan");
+  const visibleStages = getVisibleStagePlan();
+
+  if (!visibleStages.length) {
+    stageList.innerHTML = `
+      <li class="stage-item pending">
+        <div class="stage-index">1</div>
+        <div class="stage-content">
+          <p class="stage-label">等待开始</p>
+          <p class="stage-reason">先抛出你的大致想法，Stage 1 会出现在这里。</p>
+        </div>
+      </li>
+    `;
+  } else {
+    stageList.innerHTML = visibleStages
+      .map(
+        (stage) => `
+          <li class="stage-item pending" data-index="${stage.index}">
+            <div class="stage-index">${stage.index}</div>
+            <div class="stage-content">
+              <p class="stage-label">${stage.label}</p>
+              <p class="stage-reason">${stage.reason}</p>
+            </div>
+          </li>
+        `,
+      )
+      .join("");
+  }
+
+  const items = Array.from(stageList.querySelectorAll(".stage-item[data-index]"));
   items.forEach((item) => {
     const index = Number(item.dataset.index || 0);
     item.classList.remove("active", "completed", "pending");
@@ -387,19 +303,39 @@ function updateStagePlan(stagePlan = null) {
     }
   });
 
-  const total = items.length;
+  const total = state.fullStagePlan.length;
+  const revealed = visibleStages.length;
   const summary = document.getElementById("stage-summary");
   if (!total) {
-    summary.textContent = "Waiting for stage planning";
+    summary.textContent = "准备开始";
   } else if (state.isComplete) {
-    summary.textContent = "Completed";
+    summary.textContent = "已完成";
   } else if (state.awaitingDocumentReview) {
-    summary.textContent = `Completed ${state.completedStageCount}/${total}, waiting for doc review`;
+    summary.textContent = `Stage ${state.completedStageCount} 已完成`;
   } else if (state.activeStageNumber) {
-    summary.textContent = `Stage ${state.activeStageNumber} of ${total}`;
+    summary.textContent = `Stage ${state.activeStageNumber} / ${Math.max(revealed, 1)}`;
   } else {
-    summary.textContent = `${total} stages`;
+    summary.textContent = `已展开 ${revealed} 个阶段`;
   }
+}
+
+function getVisibleStagePlan() {
+  if (!state.fullStagePlan.length) {
+    return [];
+  }
+
+  const total = state.fullStagePlan.length;
+  let visibleCount = 1;
+
+  if (state.isComplete) {
+    visibleCount = total;
+  } else if (state.awaitingDocumentReview) {
+    visibleCount = Math.max(state.completedStageCount, 1);
+  } else if (state.activeStageNumber) {
+    visibleCount = Math.max(state.activeStageNumber, 1);
+  }
+
+  return state.fullStagePlan.slice(0, Math.min(visibleCount, total));
 }
 
 function updateQuestionChip(text) {
@@ -416,15 +352,15 @@ function updateDocumentPanel() {
 
   document.getElementById("doc-status-pill").textContent = doc
     ? !latestSelected && latestDoc
-      ? "History"
+      ? "历史版本"
       : doc.is_modified
-        ? "Revised"
+        ? "已修改"
         : doc.source === "uploaded"
-          ? "Uploaded"
-          : "Ready"
-    : "Not Ready";
+          ? "已上传"
+          : "已生成"
+    : "未就绪";
 
-  docPreviewInput.value = doc?.preview_text || "No document content yet.";
+  docPreviewInput.value = doc?.preview_text || "右侧会显示当前阶段文稿。";
   docPreviewInput.readOnly = !doc;
 
   if (doc?.download_url) {
@@ -448,10 +384,10 @@ function syncDocumentState(currentDocument, stageDocuments, options = {}) {
   state.latestDocumentStageIndex = state.currentDocument?.stage_index ?? null;
 
   const preferredStageIndex = options.selectedStageIndex ?? null;
-  const hasPreferredSelection = preferredStageIndex !== null && state.stageDocuments.some(
-    (doc) => doc.stage_index === preferredStageIndex,
-  );
-  const hasCurrentSelection = options.preserveSelection && state.selectedDocumentStageIndex !== null
+  const hasPreferredSelection = preferredStageIndex !== null
+    && state.stageDocuments.some((doc) => doc.stage_index === preferredStageIndex);
+  const hasCurrentSelection = options.preserveSelection
+    && state.selectedDocumentStageIndex !== null
     && state.stageDocuments.some((doc) => doc.stage_index === state.selectedDocumentStageIndex);
 
   if (hasPreferredSelection) {
@@ -467,7 +403,7 @@ function syncDocumentState(currentDocument, stageDocuments, options = {}) {
 
 function renderDocumentSelector() {
   if (!state.stageDocuments.length) {
-    docSelector.innerHTML = `<option value="">No documents yet</option>`;
+    docSelector.innerHTML = `<option value="">暂无文稿</option>`;
     docSelector.disabled = true;
     return;
   }
@@ -475,9 +411,13 @@ function renderDocumentSelector() {
   docSelector.disabled = false;
   docSelector.innerHTML = state.stageDocuments
     .map((doc) => {
-      const suffix = doc.is_modified ? " (Revised)" : "";
+      const suffix = doc.is_modified ? "（已修改）" : "";
       const selected = doc.stage_index === state.selectedDocumentStageIndex ? " selected" : "";
-      return `<option value="${doc.stage_index}"${selected}>Stage ${doc.stage_index} - ${doc.stage_label}${suffix}</option>`;
+      return (
+        `<option value="${doc.stage_index}"${selected}>` +
+        `Stage ${doc.stage_index} - ${doc.stage_label}${suffix}` +
+        "</option>"
+      );
     })
     .join("");
 }
@@ -491,9 +431,7 @@ function handleDocumentSelectionChange(event) {
   }
 
   if (state.editorDirty) {
-    const shouldSwitch = window.confirm(
-      "You have unsaved editor changes. Switch documents without saving?",
-    );
+    const shouldSwitch = window.confirm("右边还有没保存的修改，确定直接切换吗？");
     if (!shouldSwitch) {
       renderDocumentSelector();
       return;
@@ -506,10 +444,10 @@ function handleDocumentSelectionChange(event) {
 }
 
 function buildEditorStatus(doc, latestSelected) {
-  if (!doc) return "Read only";
-  if (state.editorDirty) return "Unsaved changes";
-  if (!latestSelected) return "Viewing earlier stage";
-  return "Editable";
+  if (!doc) return "只读";
+  if (state.editorDirty) return "有未保存修改";
+  if (!latestSelected) return "正在查看历史阶段";
+  return "可编辑";
 }
 
 function resolveLatestDocument(currentDocument, stageDocuments) {
@@ -564,17 +502,41 @@ function parseUserReply(rawMessage) {
 }
 
 function formatQuestions(questions, withLineBreak = false) {
-  if (!questions || !questions.length) return "There are no pending questions right now.";
+  if (!questions || !questions.length) return "No more questions right now.";
   const lines = questions.map((question, index) => `${index + 1}. ${question}`);
   return lines.join(withLineBreak ? "\n" : " | ");
 }
 
-function showPlanPanel(visible) {
-  document.getElementById("plan-panel").classList.toggle("hidden", !visible);
+function buildQuestionsMessage(message, questions) {
+  const sections = [];
+  if (message) {
+    sections.push(message);
+  }
+  if (questions && questions.length) {
+    const stageLabel = state.activeStageNumber
+      ? `Stage ${state.activeStageNumber} questions`
+      : "A couple of quick questions";
+    sections.push(`${stageLabel}:\n${formatQuestions(questions, true)}`);
+  }
+  return sections.filter(Boolean).join("\n\n");
 }
 
-function toggleAdjustmentBox() {
-  document.getElementById("adjustment-box").classList.toggle("hidden");
+function buildStageReplyMessage(data) {
+  const sections = [];
+  if (data.stage_feedback) {
+    sections.push(data.stage_feedback);
+  }
+  if (data.guidance) {
+    sections.push(data.guidance);
+  }
+  if (data.is_complete) {
+    sections.push("The final draft is on the right now.");
+  } else if (data.awaiting_document_review) {
+    sections.push("I put this stage draft on the right. Review it first, then click Confirm if you want the next stage.");
+  } else if (data.message) {
+    sections.push(data.message);
+  }
+  return sections.filter(Boolean).join("\n\n");
 }
 
 function autoGrowComposer() {
@@ -590,7 +552,7 @@ function clearComposer() {
 function handleEditorInput() {
   if (!getSelectedDocument()) return;
   state.editorDirty = true;
-  document.getElementById("doc-editor-status").textContent = "Unsaved changes";
+  document.getElementById("doc-editor-status").textContent = "有未保存修改";
 }
 
 function removeEmptyState() {
