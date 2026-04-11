@@ -1,62 +1,86 @@
 const state = {
   sessionId: null,
-  planConfirmed: false,
-  fullStagePlan: [],
+  projectTitle: "Research document",
+  openingMessage: "",
+  stages: [],
+  activeStageIndex: null,
   currentQuestions: [],
-  awaitingDocumentReview: false,
-  activeStageNumber: null,
-  completedStageCount: 0,
-  currentDocument: null,
-  stageDocuments: [],
+  currentRoundLabel: "",
   isComplete: false,
-  editorDirty: false,
-  selectedDocumentStageIndex: null,
-  latestDocumentStageIndex: null,
+  documentDrafts: {},
+  nextStepDrafts: {},
 };
 
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const chatFeed = document.getElementById("chat-feed");
-const saveDocButton = document.getElementById("save-doc-button");
-const continueStageButton = document.getElementById("continue-stage-button");
-const docPreviewInput = document.getElementById("doc-preview");
-const docSelector = document.getElementById("doc-selector");
-const docUploadInput = document.getElementById("doc-upload");
+const stagePlanEl = document.getElementById("stage-plan");
+const questionChipEl = document.getElementById("question-chip");
+const stageSummaryEl = document.getElementById("stage-summary");
+const activeStageLabelEl = document.getElementById("active-stage-label");
+const confirmStageButton = document.getElementById("confirm-stage-button");
+const regenerateStageButton = document.getElementById("regenerate-stage-button");
+const documentTitleEl = document.getElementById("document-title");
+const combinedDocumentEl = document.getElementById("combined-document");
+const saveDocumentButton = document.getElementById("save-document-button");
 
 chatForm.addEventListener("submit", handleChatSubmit);
-saveDocButton.addEventListener("click", handleSaveEditorChanges);
-continueStageButton.addEventListener("click", handleContinueStage);
 chatInput.addEventListener("input", autoGrowComposer);
-docPreviewInput.addEventListener("input", handleEditorInput);
-docSelector.addEventListener("change", handleDocumentSelectionChange);
-docUploadInput.addEventListener("change", handleUploadDocument);
+stagePlanEl.addEventListener("click", handleStageListClick);
+combinedDocumentEl.addEventListener("input", handleDocumentInput);
+confirmStageButton.addEventListener("click", handleConfirmCurrentStage);
+regenerateStageButton.addEventListener("click", handleRegenerateCurrentStage);
+saveDocumentButton.addEventListener("click", saveCombinedDocument);
 
-updateDocumentPanel();
-updateStagePlan();
+renderStagePlan();
+renderDocument();
+renderMeta();
 
 async function handleChatSubmit(event) {
   event.preventDefault();
   const message = chatInput.value.trim();
   if (!message) return;
 
+  appendBubble("user", message);
+  clearComposer();
+
   if (!state.sessionId) {
     await createSession(message);
     return;
   }
 
-  if (state.awaitingDocumentReview) {
-    window.alert("先看一下右边文稿，再决定要不要继续下一阶段。");
+  const command = parseStageCommand(message);
+  if (command?.type === "delete") {
+    await deleteStage(command.stageIndex);
+    return;
+  }
+  if (command?.type === "jump") {
+    await activateStage(command.stageIndex);
     return;
   }
 
-  await submitTurn(message);
+  const activeStage = getActiveStage();
+  if (!activeStage) {
+    appendBubble("ai", "There is no active stage right now.");
+    return;
+  }
+
+  const parsed = parseUserReply(message);
+  await stageRequest(
+    `/dialogue/sessions/${state.sessionId}/stages/${activeStage.index}/turn`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        answers: parsed.answers,
+        latest_input: parsed.latestInput,
+      }),
+    },
+    { includeQuestions: true },
+  );
 }
 
 async function createSession(initialIdea) {
-  appendBubble("user", initialIdea);
-  clearComposer();
-  removeEmptyState();
-
   try {
     const response = await fetch("/dialogue/sessions", {
       method: "POST",
@@ -66,413 +90,383 @@ async function createSession(initialIdea) {
         project_title: null,
       }),
     });
-    if (!response.ok) throw new Error("创建会话失败");
-
+    if (!response.ok) throw new Error("Could not create a session.");
     const data = await response.json();
     applySessionState(data);
-    updateMeta(data.llm_status, data.current_round_label, data.remaining_rounds);
-    updateQuestionChip(formatQuestions(data.current_questions));
-    updateStagePlan(data.stage_plan);
-    updateDocumentPanel();
-    appendBubble("ai", buildQuestionsMessage(data.opening_message, data.current_questions));
+    removeEmptyState();
+    appendBubble("ai", buildAssistantMessage(data, true));
   } catch (error) {
-    appendBubble("ai", `Something went wrong while starting the session: ${error.message}`);
+    appendBubble("ai", `Failed to start the session: ${error.message}`);
   }
 }
 
-async function submitTurn(rawMessage) {
-  appendBubble("user", rawMessage);
-  clearComposer();
-  const parsed = parseUserReply(rawMessage);
+async function handleConfirmCurrentStage() {
+  const activeStage = getActiveStage();
+  if (!activeStage) return;
+  await stageRequest(`/dialogue/sessions/${state.sessionId}/stages/${activeStage.index}/confirm`, {
+    method: "POST",
+  }, { includeQuestions: true });
+}
 
+async function handleRegenerateCurrentStage() {
+  const activeStage = getActiveStage();
+  if (!activeStage) return;
+  await stageRequest(`/dialogue/sessions/${state.sessionId}/stages/${activeStage.index}/regenerate`, {
+    method: "POST",
+  }, { includeQuestions: true });
+}
+
+async function saveCombinedDocument() {
+  if (!state.sessionId) return;
+  const content = buildCombinedDocumentPayload();
   try {
-    const response = await fetch(`/dialogue/sessions/${state.sessionId}/turn`, {
+    const response = await fetch(`/dialogue/sessions/${state.sessionId}/document/save`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        answers: parsed.answers,
-        latest_input: parsed.latestInput,
-      }),
+      body: JSON.stringify({ content }),
     });
-    if (!response.ok) throw new Error("提交这一轮内容失败");
-
-    const data = await response.json();
-    applyTurnState(data);
-    updateMeta(null, data.current_round_label, data.remaining_rounds);
-    updateStagePlan();
-    updateDocumentPanel();
-    appendBubble("ai", buildStageReplyMessage(data));
-
-    if (data.is_complete) {
-      updateQuestionChip("All stages are complete.");
-      if (data.final_summary) {
-        appendBubble("ai", `Here is the final wrap-up:\n${data.final_summary}`);
-      }
-      return;
+    if (!response.ok) {
+      const payload = await safeJson(response);
+      throw new Error(payload?.detail || "Could not save the document.");
     }
+    const data = await response.json();
+    applySessionState(data);
+    appendBubble("ai", buildAssistantMessage(data));
+  } catch (error) {
+    appendBubble("ai", `Document save failed: ${error.message}`);
+  }
+}
 
-    if (data.awaiting_document_review) {
-      updateQuestionChip("The draft on the right is ready. Click Confirm when you want the next stage.");
-    } else {
-      updateQuestionChip(formatQuestions(data.next_questions));
+async function deleteStage(stageIndex) {
+  await stageRequest(`/dialogue/sessions/${state.sessionId}/stages/${stageIndex}/delete`, {
+    method: "POST",
+  }, { includeQuestions: true });
+}
+
+async function activateStage(stageIndex) {
+  await stageRequest(`/dialogue/sessions/${state.sessionId}/stages/${stageIndex}/activate`, {
+    method: "POST",
+  }, { includeQuestions: true });
+}
+
+async function stageRequest(url, options, extra = {}) {
+  try {
+    const response = await fetch(url, options);
+    if (!response.ok) {
+      const payload = await safeJson(response);
+      throw new Error(payload?.detail || "Request failed.");
     }
-  } catch (error) {
-    appendBubble("ai", `This stage response could not be submitted: ${error.message}`);
-  }
-}
-
-async function handleUploadDocument() {
-  const selectedDoc = getSelectedDocument();
-  if (!state.sessionId || !selectedDoc) return;
-  if (!docUploadInput.files || !docUploadInput.files.length) return;
-
-  const formData = new FormData();
-  formData.append("file", docUploadInput.files[0]);
-
-  try {
-    const response = await fetch(
-      `/dialogue/sessions/${state.sessionId}/documents/${selectedDoc.stage_index}/upload`,
-      { method: "POST", body: formData },
-    );
-    if (!response.ok) throw new Error("上传修订文稿失败");
-
     const data = await response.json();
-    syncDocumentState(data.current_document, data.stage_documents || [], {
-      preserveSelection: true,
-      selectedStageIndex: selectedDoc.stage_index,
-    });
-    updateDocumentPanel();
-    appendBubble("ai", data.message);
-    docUploadInput.value = "";
+    applySessionState(data);
+    appendBubble("ai", buildAssistantMessage(data, extra.includeQuestions === true));
   } catch (error) {
-    appendBubble("ai", `Document upload failed: ${error.message}`);
-    docUploadInput.value = "";
-  }
-}
-
-async function handleContinueStage() {
-  if (!state.sessionId) return;
-  if (state.editorDirty) {
-    window.alert("先把右边的修改保存一下，再继续。");
-    return;
-  }
-  if (!isLatestDocumentSelected()) {
-    window.alert("请先切回最新阶段的文稿，再继续。");
-    return;
-  }
-
-  try {
-    const response = await fetch(`/dialogue/sessions/${state.sessionId}/continue`, {
-      method: "POST",
-    });
-    if (!response.ok) throw new Error("推进到下一阶段失败");
-
-    const data = await response.json();
-    state.awaitingDocumentReview = data.awaiting_document_review;
-    state.activeStageNumber = data.active_stage_number;
-    state.completedStageCount = data.completed_stage_count;
-    state.currentQuestions = data.current_questions || [];
-    syncDocumentState(data.current_document, data.stage_documents || []);
-
-    updateMeta(null, data.current_round_label, data.remaining_rounds);
-    updateStagePlan();
-    updateDocumentPanel();
-    updateQuestionChip(formatQuestions(data.current_questions));
-    appendBubble("ai", buildQuestionsMessage(data.message, data.current_questions));
-  } catch (error) {
-    appendBubble("ai", `We cannot move to the next stage yet: ${error.message}`);
-  }
-}
-
-async function handleSaveEditorChanges() {
-  const selectedDoc = getSelectedDocument();
-  if (!state.sessionId || !selectedDoc) return;
-
-  const content = docPreviewInput.value.trim();
-  if (!content) {
-    window.alert("右边文稿不能是空的。");
-    return;
-  }
-
-  try {
-    const response = await fetch(
-      `/dialogue/sessions/${state.sessionId}/documents/${selectedDoc.stage_index}/edit`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
-      },
-    );
-    if (!response.ok) throw new Error("保存编辑内容失败");
-
-    const data = await response.json();
-    syncDocumentState(data.current_document, data.stage_documents || [], {
-      preserveSelection: true,
-      selectedStageIndex: selectedDoc.stage_index,
-    });
-    state.editorDirty = false;
-    updateDocumentPanel();
-    appendBubble("ai", data.message);
-  } catch (error) {
-    appendBubble("ai", `Saving the draft failed: ${error.message}`);
+    appendBubble("ai", `Action failed: ${error.message}`);
   }
 }
 
 function applySessionState(data) {
   state.sessionId = data.session_id;
-  state.planConfirmed = data.plan_confirmed;
-  state.fullStagePlan = Array.isArray(data.stage_plan) ? data.stage_plan : [];
-  state.currentQuestions = data.current_questions || [];
-  state.awaitingDocumentReview = data.awaiting_document_review;
-  state.activeStageNumber = data.active_stage_number;
-  state.completedStageCount = data.completed_stage_count || 0;
-  state.isComplete = data.is_complete;
-  syncDocumentState(data.current_document, data.stage_documents || []);
+  state.projectTitle = data.project_title || "Research document";
+  state.openingMessage = data.opening_message || "";
+  state.stages = Array.isArray(data.stages) ? data.stages : [];
+  state.activeStageIndex = data.active_stage_index;
+  state.currentQuestions = Array.isArray(data.current_questions) ? data.current_questions : [];
+  state.currentRoundLabel = data.current_round_label || "";
+  state.isComplete = Boolean(data.is_complete);
+
+  const drafts = {};
+  const nextSteps = {};
+  state.stages.forEach((stage) => {
+    drafts[stage.index] = (stage.draft || extractStageBody(stage) || "").trim();
+    nextSteps[stage.index] = String(stage.guidance || "").trim();
+  });
+  state.documentDrafts = drafts;
+  state.nextStepDrafts = nextSteps;
+
+  renderStagePlan();
+  renderDocument();
+  renderMeta();
 }
 
-function applyTurnState(data) {
-  state.currentQuestions = data.next_questions || [];
-  state.awaitingDocumentReview = data.awaiting_document_review;
-  state.activeStageNumber = data.active_stage_number;
-  state.completedStageCount = data.completed_stage_count || 0;
-  state.isComplete = data.is_complete;
-  syncDocumentState(data.current_document, data.stage_documents || []);
+function renderMeta() {
+  documentTitleEl.textContent = state.projectTitle || "Research document";
+  stageSummaryEl.textContent = state.currentRoundLabel || "Start a session to load the stage map.";
+  activeStageLabelEl.textContent = state.activeStageIndex
+    ? `Active: Stage ${state.activeStageIndex}`
+    : "No active stage";
+  questionChipEl.textContent = formatQuestions(state.currentQuestions);
+
+  const activeStage = getActiveStage();
+  confirmStageButton.disabled = !activeStage || !activeStage.can_confirm;
+  regenerateStageButton.disabled = !activeStage || !activeStage.can_regenerate;
+  saveDocumentButton.disabled = !state.sessionId;
 }
 
-function updateMeta(llmStatus, roundLabel, remainingRounds) {
-  const llmStatusEl = document.getElementById("llm-status");
-  const roundLabelEl = document.getElementById("round-label");
-  const roundsLeftEl = document.getElementById("rounds-left");
-
-  if (llmStatusEl && llmStatus !== null && llmStatus !== undefined) {
-    llmStatusEl.textContent = llmStatus;
-  }
-  if (roundLabelEl) {
-    roundLabelEl.textContent = roundLabel;
-  }
-  if (roundsLeftEl) {
-    roundsLeftEl.textContent = String(remainingRounds);
-  }
-}
-
-function updateStagePlan(stagePlan = null) {
-  if (Array.isArray(stagePlan)) {
-    state.fullStagePlan = stagePlan;
-  }
-
-  const stageList = document.getElementById("stage-plan");
-  const visibleStages = getVisibleStagePlan();
-
-  if (!visibleStages.length) {
-    stageList.innerHTML = `
-      <li class="stage-item pending">
+function renderStagePlan() {
+  if (!state.stages.length) {
+    stagePlanEl.innerHTML = `
+      <li class="stage-item is-empty">
         <div class="stage-index">1</div>
-        <div class="stage-content">
-          <p class="stage-label">等待开始</p>
-          <p class="stage-reason">先抛出你的大致想法，Stage 1 会出现在这里。</p>
+        <div class="stage-main">
+          <p class="stage-label">Waiting to start</p>
+          <p class="stage-reason">A new session will generate the four CAR stages immediately.</p>
         </div>
       </li>
     `;
-  } else {
-    stageList.innerHTML = visibleStages
-      .map(
-        (stage) => `
-          <li class="stage-item pending" data-index="${stage.index}">
-            <div class="stage-index">${stage.index}</div>
-            <div class="stage-content">
-              <p class="stage-label">${stage.label}</p>
-              <p class="stage-reason">${stage.reason}</p>
-            </div>
-          </li>
-        `,
-      )
-      .join("");
-  }
-
-  const items = Array.from(stageList.querySelectorAll(".stage-item[data-index]"));
-  items.forEach((item) => {
-    const index = Number(item.dataset.index || 0);
-    item.classList.remove("active", "completed", "pending");
-
-    if (state.isComplete || index <= state.completedStageCount) {
-      item.classList.add("completed");
-    } else if (state.activeStageNumber === index) {
-      item.classList.add("active");
-    } else {
-      item.classList.add("pending");
-    }
-  });
-
-  const total = state.fullStagePlan.length;
-  const revealed = visibleStages.length;
-  const summary = document.getElementById("stage-summary");
-  if (!total) {
-    summary.textContent = "准备开始";
-  } else if (state.isComplete) {
-    summary.textContent = "已完成";
-  } else if (state.awaitingDocumentReview) {
-    summary.textContent = `Stage ${state.completedStageCount} 已完成`;
-  } else if (state.activeStageNumber) {
-    summary.textContent = `Stage ${state.activeStageNumber} / ${Math.max(revealed, 1)}`;
-  } else {
-    summary.textContent = `已展开 ${revealed} 个阶段`;
-  }
-}
-
-function getVisibleStagePlan() {
-  if (!state.fullStagePlan.length) {
-    return [];
-  }
-
-  const total = state.fullStagePlan.length;
-  let visibleCount = 1;
-
-  if (state.isComplete) {
-    visibleCount = total;
-  } else if (state.awaitingDocumentReview) {
-    visibleCount = Math.max(state.completedStageCount, 1);
-  } else if (state.activeStageNumber) {
-    visibleCount = Math.max(state.activeStageNumber, 1);
-  }
-
-  return state.fullStagePlan.slice(0, Math.min(visibleCount, total));
-}
-
-function updateQuestionChip(text) {
-  document.getElementById("question-chip").textContent = text;
-}
-
-function updateDocumentPanel() {
-  const doc = getSelectedDocument();
-  const latestDoc = getLatestDocument();
-  const latestSelected = isLatestDocumentSelected();
-  const downloadLink = document.getElementById("download-doc");
-  const uploadInput = document.getElementById("doc-upload");
-  const editorStatus = document.getElementById("doc-editor-status");
-
-  document.getElementById("doc-status-pill").textContent = doc
-    ? !latestSelected && latestDoc
-      ? "历史版本"
-      : doc.is_modified
-        ? "已修改"
-        : doc.source === "uploaded"
-          ? "已上传"
-          : "已生成"
-    : "未就绪";
-
-  docPreviewInput.value = doc?.preview_text || "右侧会显示当前阶段文稿。";
-  docPreviewInput.readOnly = !doc;
-
-  if (doc?.download_url) {
-    downloadLink.href = doc.download_url;
-    downloadLink.classList.remove("disabled");
-  } else {
-    downloadLink.href = "#";
-    downloadLink.classList.add("disabled");
-  }
-
-  continueStageButton.disabled = !state.awaitingDocumentReview || !latestSelected;
-  saveDocButton.disabled = !doc;
-  uploadInput.disabled = !doc;
-  editorStatus.textContent = buildEditorStatus(doc, latestSelected);
-  renderDocumentSelector();
-}
-
-function syncDocumentState(currentDocument, stageDocuments, options = {}) {
-  state.stageDocuments = Array.isArray(stageDocuments) ? stageDocuments : [];
-  state.currentDocument = resolveLatestDocument(currentDocument, state.stageDocuments);
-  state.latestDocumentStageIndex = state.currentDocument?.stage_index ?? null;
-
-  const preferredStageIndex = options.selectedStageIndex ?? null;
-  const hasPreferredSelection = preferredStageIndex !== null
-    && state.stageDocuments.some((doc) => doc.stage_index === preferredStageIndex);
-  const hasCurrentSelection = options.preserveSelection
-    && state.selectedDocumentStageIndex !== null
-    && state.stageDocuments.some((doc) => doc.stage_index === state.selectedDocumentStageIndex);
-
-  if (hasPreferredSelection) {
-    state.selectedDocumentStageIndex = preferredStageIndex;
-  } else if (hasCurrentSelection) {
-    state.selectedDocumentStageIndex = state.selectedDocumentStageIndex;
-  } else {
-    state.selectedDocumentStageIndex = state.latestDocumentStageIndex;
-  }
-
-  state.editorDirty = false;
-}
-
-function renderDocumentSelector() {
-  if (!state.stageDocuments.length) {
-    docSelector.innerHTML = `<option value="">暂无文稿</option>`;
-    docSelector.disabled = true;
     return;
   }
 
-  docSelector.disabled = false;
-  docSelector.innerHTML = state.stageDocuments
-    .map((doc) => {
-      const suffix = doc.is_modified ? "（已修改）" : "";
-      const selected = doc.stage_index === state.selectedDocumentStageIndex ? " selected" : "";
-      return (
-        `<option value="${doc.stage_index}"${selected}>` +
-        `Stage ${doc.stage_index} - ${doc.stage_label}${suffix}` +
-        "</option>"
-      );
+  stagePlanEl.innerHTML = state.stages
+    .map((stage) => {
+      const classes = [
+        "stage-item",
+        stage.is_active ? "is-active" : "",
+        stage.status === "locked" ? "is-locked" : "",
+        stage.status === "deleted" ? "is-deleted" : "",
+        stage.is_outdated ? "is-outdated" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      return `
+        <li class="${classes}" data-stage-index="${stage.index}">
+          <div class="stage-index">${stage.index}</div>
+          <div class="stage-main">
+            <div class="stage-topline">
+              <p class="stage-label">${escapeHtml(stage.label)}</p>
+              <div class="stage-badges">${buildStageBadges(stage)}</div>
+            </div>
+            <p class="stage-reason">${escapeHtml(stage.reason)}</p>
+          </div>
+        </li>
+      `;
     })
     .join("");
 }
 
-function handleDocumentSelectionChange(event) {
-  const stageIndex = Number(event.target.value);
-
-  if (!Number.isFinite(stageIndex) || stageIndex === state.selectedDocumentStageIndex) {
-    renderDocumentSelector();
+function renderDocument() {
+  const visibleStages = state.stages.filter((stage) => stage.status !== "deleted");
+  if (!visibleStages.length) {
+    combinedDocumentEl.innerHTML = `<p class="doc-empty">The document will appear here after you start a session.</p>`;
     return;
   }
 
-  if (state.editorDirty) {
-    const shouldSwitch = window.confirm("右边还有没保存的修改，确定直接切换吗？");
-    if (!shouldSwitch) {
-      renderDocumentSelector();
-      return;
-    }
+  combinedDocumentEl.innerHTML = visibleStages
+    .map((stage) => {
+      const body = state.documentDrafts[stage.index] || "";
+      const editable = stage.status !== "locked";
+      const placeholder = editable
+        ? "Write or revise this stage here."
+        : "This stage will become editable after earlier stages are confirmed or skipped.";
+      return `
+        <section class="doc-section ${editable ? "" : "is-locked"}">
+          <h3>Stage ${stage.index}: ${escapeHtml(stage.label)}</h3>
+          <div class="doc-edit-grid">
+            <div class="doc-edit-card">
+              <p class="doc-edit-label">Working Draft</p>
+              <div
+                class="doc-body ${editable ? "" : "is-readonly"}"
+                data-stage-index="${stage.index}"
+                data-field="draft"
+                data-placeholder="${escapeHtml(placeholder)}"
+                contenteditable="${editable ? "true" : "false"}"
+                spellcheck="false"
+              >${formatEditableText(body)}</div>
+            </div>
+            <div class="doc-edit-card">
+              <p class="doc-edit-label">Next Step</p>
+              <div
+                class="doc-body doc-body-compact ${editable ? "" : "is-readonly"}"
+                data-stage-index="${stage.index}"
+                data-field="guidance"
+                data-placeholder="Describe the next move for this stage."
+                contenteditable="${editable ? "true" : "false"}"
+                spellcheck="false"
+              >${formatEditableText(state.nextStepDrafts[stage.index] || "")}</div>
+            </div>
+          </div>
+          ${renderStageSupport(stage)}
+        </section>
+      `;
+    })
+    .join("");
+}
+
+function handleStageListClick(event) {
+  const item = event.target.closest("[data-stage-index]");
+  if (!item) return;
+  const stageIndex = Number(item.dataset.stageIndex);
+  const stage = getStage(stageIndex);
+  if (!stage || !stage.can_activate) return;
+  activateStage(stageIndex);
+}
+
+function handleDocumentInput(event) {
+  const body = event.target.closest(".doc-body[data-stage-index]");
+  if (!body) return;
+  const stageIndex = Number(body.dataset.stageIndex);
+  const field = body.dataset.field;
+  const text = normalizeEditableText(body.innerText);
+  if (field === "guidance") {
+    state.nextStepDrafts[stageIndex] = text;
+    return;
+  }
+  state.documentDrafts[stageIndex] = text;
+}
+
+function buildCombinedDocumentPayload() {
+  return state.stages
+    .filter((stage) => stage.status !== "deleted")
+    .map((stage) => {
+      const body = (state.documentDrafts[stage.index] || "").trim();
+      const nextStep = (state.nextStepDrafts[stage.index] || "").trim();
+      const lines = [
+        `Stage ${stage.index}: ${stage.label}`,
+        "Working Draft:",
+        body || "This stage still needs more detail.",
+      ];
+      if (nextStep) {
+        lines.push("", "Next Step:", nextStep);
+      }
+      return lines.join("\n");
+    })
+    .join("\n\n");
+}
+
+function buildAssistantMessage(data, includeQuestions = false) {
+  const sections = [];
+  if (data.message) sections.push(data.message);
+  if (!data.message && state.openingMessage) sections.push(state.openingMessage);
+  if (includeQuestions && state.currentQuestions.length) {
+    sections.push(`Current stage questions:\n${formatQuestions(state.currentQuestions, true)}`);
+  }
+  if (data.is_complete) {
+    sections.push("All remaining stages are now completed or skipped.");
+  }
+  return sections.filter(Boolean).join("\n\n");
+}
+
+function renderStageSupport(stage) {
+  const blocks = [];
+
+  if (stage.feedback) {
+    blocks.push(`
+      <div class="doc-support-block">
+        <p class="doc-support-title">System Feedback</p>
+        <p class="doc-support-copy">${escapeHtml(stage.feedback)}</p>
+      </div>
+    `);
   }
 
-  state.selectedDocumentStageIndex = stageIndex;
-  state.editorDirty = false;
-  updateDocumentPanel();
-}
-
-function buildEditorStatus(doc, latestSelected) {
-  if (!doc) return "只读";
-  if (state.editorDirty) return "有未保存修改";
-  if (!latestSelected) return "正在查看历史阶段";
-  return "可编辑";
-}
-
-function resolveLatestDocument(currentDocument, stageDocuments) {
-  if (Array.isArray(stageDocuments) && stageDocuments.length) {
-    return stageDocuments[stageDocuments.length - 1];
+  if (stage.guidance) {
+    blocks.push(`
+      <div class="doc-support-block">
+        <p class="doc-support-title">Next Step</p>
+        <p class="doc-support-copy">${escapeHtml(stage.guidance)}</p>
+      </div>
+    `);
   }
-  return currentDocument || null;
+
+  if (Array.isArray(stage.questions) && stage.questions.length) {
+    blocks.push(`
+      <div class="doc-support-block">
+        <p class="doc-support-title">If You Continue This Stage</p>
+        <ol class="doc-question-list">
+          ${stage.questions.map((question) => `<li>${escapeHtml(question)}</li>`).join("")}
+        </ol>
+      </div>
+    `);
+  }
+
+  return blocks.join("");
 }
 
-function getLatestDocument() {
-  if (state.latestDocumentStageIndex === null) return null;
-  return state.stageDocuments.find((doc) => doc.stage_index === state.latestDocumentStageIndex) || null;
+function buildStageBadges(stage) {
+  const badges = [
+    `<span class="stage-badge stage-badge-main">${escapeHtml(primaryStageBadge(stage))}</span>`,
+  ];
+  if (stage.is_outdated) {
+    badges.push('<span class="stage-badge stage-badge-warn">Outdated</span>');
+  }
+  return badges.join("");
 }
 
-function getSelectedDocument() {
-  if (state.selectedDocumentStageIndex === null) return null;
-  return state.stageDocuments.find((doc) => doc.stage_index === state.selectedDocumentStageIndex) || null;
+function primaryStageBadge(stage) {
+  if (stage.status === "deleted") return "Deleted";
+  if (stage.is_active) return "Active";
+  if (stage.needs_confirmation) return "Needs confirm";
+  if (stage.status === "completed") return "Completed";
+  if (stage.status === "skipped") return "Skipped";
+  if (stage.status === "locked") return "Locked";
+  return "Available";
 }
 
-function isLatestDocumentSelected() {
-  return (
-    state.selectedDocumentStageIndex !== null
-    && state.latestDocumentStageIndex !== null
-    && state.selectedDocumentStageIndex === state.latestDocumentStageIndex
-  );
+function extractStageBody(stage) {
+  const preview = stage.document?.preview_text || "";
+  const lines = preview.split(/\r?\n/).map((line) => line.trim());
+  let startIndex = 0;
+  if (lines[0] && lines[0] !== `Stage ${stage.index}: ${stage.label}`) {
+    startIndex = 1;
+  }
+  if (lines[startIndex] === `Stage ${stage.index}: ${stage.label}`) {
+    startIndex += 1;
+  }
+  const normalized = lines.slice(startIndex).join("\n").trim();
+  return normalized || "";
+}
+
+function parseUserReply(rawMessage) {
+  const blocks = rawMessage
+    .split(/\n{2,}/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (blocks.length <= 1) return { answers: [rawMessage.trim()], latestInput: null };
+  if (blocks.length === 2) return { answers: blocks, latestInput: null };
+  return {
+    answers: blocks.slice(0, 2),
+    latestInput: blocks.slice(2).join("\n\n"),
+  };
+}
+
+function parseStageCommand(message) {
+  const deleteMatch = message.match(/^delete\s+stage\s*(\d+)$/i);
+  if (deleteMatch) {
+    return { type: "delete", stageIndex: Number(deleteMatch[1]) };
+  }
+
+  const jumpMatch = message.match(/^jump\s+into\s+stage\s*(\d+)$/i);
+  if (jumpMatch) {
+    return { type: "jump", stageIndex: Number(jumpMatch[1]) };
+  }
+
+  return null;
+}
+
+function formatQuestions(questions, withLineBreak = false) {
+  if (!questions || !questions.length) return "No extra prompts for the current stage.";
+  const lines = questions.map((question, index) => `${index + 1}. ${question}`);
+  return lines.join(withLineBreak ? "\n" : " | ");
+}
+
+function formatEditableText(text) {
+  if (!text) return "";
+  return escapeHtml(text).replace(/\n/g, "<br>");
+}
+
+function normalizeEditableText(text) {
+  return String(text || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\r/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function getActiveStage() {
+  return state.stages.find((stage) => stage.index === state.activeStageIndex) || null;
+}
+
+function getStage(stageIndex) {
+  return state.stages.find((stage) => stage.index === stageIndex) || null;
 }
 
 function appendBubble(role, content) {
@@ -485,58 +479,9 @@ function appendBubble(role, content) {
   chatFeed.scrollTop = chatFeed.scrollHeight;
 }
 
-function parseUserReply(rawMessage) {
-  const blocks = rawMessage
-    .split(/\n{2,}/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-  if (blocks.length === 0) return { answers: [rawMessage], latestInput: null };
-  if (blocks.length === 1) return { answers: [blocks[0]], latestInput: null };
-  if (blocks.length === 2) return { answers: [blocks[0], blocks[1]], latestInput: null };
-
-  return {
-    answers: [blocks[0], blocks[1]],
-    latestInput: blocks.slice(2).join("\n\n"),
-  };
-}
-
-function formatQuestions(questions, withLineBreak = false) {
-  if (!questions || !questions.length) return "No more questions right now.";
-  const lines = questions.map((question, index) => `${index + 1}. ${question}`);
-  return lines.join(withLineBreak ? "\n" : " | ");
-}
-
-function buildQuestionsMessage(message, questions) {
-  const sections = [];
-  if (message) {
-    sections.push(message);
-  }
-  if (questions && questions.length) {
-    const stageLabel = state.activeStageNumber
-      ? `Stage ${state.activeStageNumber} questions`
-      : "A couple of quick questions";
-    sections.push(`${stageLabel}:\n${formatQuestions(questions, true)}`);
-  }
-  return sections.filter(Boolean).join("\n\n");
-}
-
-function buildStageReplyMessage(data) {
-  const sections = [];
-  if (data.stage_feedback) {
-    sections.push(data.stage_feedback);
-  }
-  if (data.guidance) {
-    sections.push(data.guidance);
-  }
-  if (data.is_complete) {
-    sections.push("The final draft is on the right now.");
-  } else if (data.awaiting_document_review) {
-    sections.push("I put this stage draft on the right. Review it first, then click Confirm if you want the next stage.");
-  } else if (data.message) {
-    sections.push(data.message);
-  }
-  return sections.filter(Boolean).join("\n\n");
+function removeEmptyState() {
+  const emptyState = chatFeed.querySelector(".empty-state");
+  if (emptyState) emptyState.remove();
 }
 
 function autoGrowComposer() {
@@ -549,13 +494,15 @@ function clearComposer() {
   chatInput.style.height = "auto";
 }
 
-function handleEditorInput() {
-  if (!getSelectedDocument()) return;
-  state.editorDirty = true;
-  document.getElementById("doc-editor-status").textContent = "有未保存修改";
+function safeJson(response) {
+  return response.json().catch(() => null);
 }
 
-function removeEmptyState() {
-  const emptyState = chatFeed.querySelector(".empty-state");
-  if (emptyState) emptyState.remove();
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }

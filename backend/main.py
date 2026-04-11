@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from backend.api.router import api_router
-from backend.core.config import PROJECT_ROOT
-from backend.core.config import get_settings
+from backend.config import PROJECT_ROOT
+from backend.config import get_settings
+from backend.router import api_router
 
 
 def create_app() -> FastAPI:
@@ -11,7 +11,7 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
-        description="Backend scaffold for an action-research facilitation system.",
+        description="Action research collaboration prototype.",
     )
     application.mount(
         "/static",

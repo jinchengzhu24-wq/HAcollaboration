@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -9,39 +9,43 @@
   <body>
     <div class="app-shell">
       <aside class="sidebar">
-        <section class="sidebar-card stage-card">
+        <section class="stage-card">
           <div class="stage-header">
-            <p class="section-title">Stages</p>
-            <span id="stage-summary" class="stage-summary">准备开始</span>
+            <div>
+              <p class="section-title">CAR stages</p>
+              <h1 class="panel-title">Research map</h1>
+            </div>
+            <p id="active-stage-label" class="active-stage-label">No active stage</p>
           </div>
-          <ol id="stage-plan" class="stage-list">
-            <li class="stage-item pending">
-              <div class="stage-index">1</div>
-              <div class="stage-content">
-                <p class="stage-label">等待开始</p>
-                <p class="stage-reason">先抛出你的大致想法，Stage 1 会出现在这里。</p>
-              </div>
-            </li>
-          </ol>
-          <button id="continue-stage-button" class="secondary-button" type="button">
-            Confirm
-          </button>
+
+          <p id="stage-summary" class="stage-summary">Start a session to load the stage map.</p>
+          <ol id="stage-plan" class="stage-list"></ol>
+
+          <div class="stage-actions">
+            <button id="confirm-stage-button" class="primary-button" type="button">Confirm</button>
+            <button id="regenerate-stage-button" class="ghost-button" type="button">Regenerate</button>
+          </div>
         </section>
       </aside>
 
       <main class="chat-layout">
         <header class="chat-header">
           <div>
-            <p class="chat-header-kicker">对话区</p>
-            <h2>分阶段对话</h2>
+            <p class="section-title">Conversation</p>
+            <h2 class="panel-title">Action Research Workspace</h2>
           </div>
-          <div id="question-chip" class="question-chip">Start with your idea. We will move one stage at a time.</div>
+          <div id="question-chip" class="question-chip">
+            Start with a research idea. The system will prepare four CAR stages immediately.
+          </div>
         </header>
 
         <section id="chat-feed" class="chat-feed">
           <div class="empty-state">
-            <h3>先说一个想法</h3>
-            <p>你先说个大概想法，我会先简短回应，然后从 Stage 1 开始。</p>
+            <h3>Start with your classroom challenge</h3>
+            <p>
+              All four CAR stages will appear at once. You can revisit any available stage later,
+              and you can remove a stage with a command like <code>delete stage 2</code>.
+            </p>
           </div>
         </section>
 
@@ -50,39 +54,30 @@
             id="chat-input"
             class="composer-input"
             rows="1"
-            placeholder="输入你的想法，或者直接回答当前这两个问题。"
+            placeholder="Answer the active stage, or type delete stage 2 / jump into stage 2"
           ></textarea>
-          <button id="send-button" class="send-button" type="submit">发送</button>
+          <button id="send-button" class="primary-button send-button" type="submit">Send</button>
         </form>
       </main>
 
       <aside class="doc-panel">
-        <div class="doc-card">
-          <div class="doc-toolbar">
-            <select id="doc-selector" class="doc-selector" aria-label="阶段文稿选择器">
-              <option value="">暂无文稿</option>
-            </select>
-            <span id="doc-status-pill" class="doc-status-pill">未就绪</span>
-          </div>
-
-          <div class="doc-preview-wrap">
-            <div class="doc-editor-header">
-              <span id="doc-editor-status" class="doc-editor-status">只读</span>
+        <section class="doc-card">
+          <div class="doc-header">
+            <div>
+              <p class="section-title">Working document</p>
+              <h2 id="document-title" class="panel-title">Research document</h2>
+              <p class="doc-copy">
+                Edit the working draft and next step directly here. System feedback and follow-up
+                questions stay visible as reference.
+              </p>
             </div>
-            <textarea id="doc-preview" class="doc-preview" rows="18">右侧会显示当前阶段文稿。</textarea>
+            <button id="save-document-button" class="primary-button" type="button">Save document</button>
           </div>
 
-          <div class="doc-actions">
-            <button id="save-doc-button" class="primary-button" type="button">保存</button>
-            <a id="download-doc" class="secondary-link disabled" href="#" target="_blank" rel="noreferrer">
-              下载
-            </a>
-            <label class="upload-compact">
-              <span>导入 docx</span>
-              <input id="doc-upload" type="file" accept=".docx" />
-            </label>
+          <div class="doc-paper-wrap">
+            <div id="combined-document" class="doc-paper"></div>
           </div>
-        </div>
+        </section>
       </aside>
     </div>
 
