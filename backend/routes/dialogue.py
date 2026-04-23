@@ -241,6 +241,8 @@ def _serialize_stage(session, stage) -> DialogueStageResponse:
         summary=stage.summary,
         feedback=stage.feedback,
         guidance=stage.guidance,
+        latest_answers=list(stage.latest_answers),
+        latest_input=stage.latest_input,
         document=_serialize_document(stage.document, session.session_id),
     )
 

@@ -162,13 +162,18 @@ class StageDocumentService:
                 document.add_paragraph("System Feedback:")
                 document.add_paragraph(feedback)
 
-            guidance = str(section.get("guidance", "") or "").strip()
-            if guidance:
-                document.add_paragraph("Next Step:")
-                document.add_paragraph(guidance)
+            qa_record = self._compose_qa_record(
+                questions=[str(question) for question in section.get("questions", [])],
+                answers=[str(answer) for answer in section.get("answers", [])],
+                latest_input=section.get("latest_input"),
+            )
+            if qa_record:
+                document.add_paragraph("Question and Answer Record:")
+                for block in self._split_blocks(qa_record):
+                    document.add_paragraph(block)
 
             questions = [str(question).strip() for question in section.get("questions", []) if str(question).strip()]
-            if questions:
+            if questions and not qa_record:
                 document.add_paragraph("Current Questions:")
                 for index, question in enumerate(questions, start=1):
                     document.add_paragraph(f"{index}. {question}")
@@ -231,6 +236,27 @@ class StageDocumentService:
         if latest_input and latest_input.strip():
             blocks.append(latest_input.strip())
         return "\n".join(blocks)
+
+    def _compose_qa_record(
+        self,
+        questions: list[str],
+        answers: list[str],
+        latest_input: Any,
+    ) -> str:
+        lines = []
+        cleaned_questions = [question.strip() for question in questions if question and question.strip()]
+        for index, answer in enumerate(answers, start=1):
+            cleaned_answer = answer.strip()
+            if not cleaned_answer:
+                continue
+            question = cleaned_questions[index - 1] if index - 1 < len(cleaned_questions) else "Follow-up response"
+            lines.append(f"Q{index}: {question}")
+            lines.append(f"A{index}: {cleaned_answer}")
+        if isinstance(latest_input, str) and latest_input.strip():
+            note_index = len(answers) + 1
+            lines.append(f"Q{note_index}: Additional user input")
+            lines.append(f"A{note_index}: {latest_input.strip()}")
+        return "\n".join(lines).strip()
 
     def _clean_document_text(self, text: str) -> str:
         if not text or not text.strip():

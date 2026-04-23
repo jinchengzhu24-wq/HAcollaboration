@@ -74,14 +74,17 @@ class DialogueService:
         for stage in session.stages:
             if stage.status == StageStatus.DELETED:
                 continue
-            draft, guidance = self._editable_parts(stage.draft or self._current_stage_body(session, stage), stage.guidance)
+            draft, _ = self._editable_parts(stage.draft or self._current_stage_body(session, stage), stage.guidance)
             parts = [
                 f"Stage {stage.index}: {stage.label}",
                 "Working Draft:",
                 draft or "This stage still needs more detail.",
             ]
-            if guidance:
-                parts.extend(["Next Step:", guidance])
+            if stage.feedback:
+                parts.extend(["System Feedback:", stage.feedback.strip()])
+            qa_record = self._compose_qa_record(stage)
+            if qa_record:
+                parts.extend(["Question and Answer Record:", qa_record])
             sections.append("\n".join(parts).rstrip())
         return "\n\n".join(section for section in sections if section.strip())
 
@@ -300,7 +303,7 @@ class DialogueService:
         for stage in session.stages:
             if stage.index not in updates or stage.status == StageStatus.DELETED:
                 continue
-            new_body = updates[stage.index]
+            new_body = self._normalize_stage_body(updates[stage.index], session, stage)
             current_body = self._current_stage_body(session, stage)
             current_guidance = (stage.guidance or "").strip()
             draft, guidance = self._split_editable_section(new_body, current_guidance)
@@ -341,8 +344,9 @@ class DialogueService:
                 "stage_label": stage.label,
                 "draft": self._current_stage_body(session, stage),
                 "feedback": stage.feedback or "",
-                "guidance": stage.guidance or "",
                 "questions": list(stage.questions),
+                "answers": list(stage.latest_answers),
+                "latest_input": stage.latest_input,
             }
             for stage in session.stages
             if stage.status != StageStatus.DELETED
@@ -400,15 +404,25 @@ class DialogueService:
                 payload = self.deepseek_client.generate_json(
                     system_prompt=(
                         "You are a concise classroom action research assistant. "
-                        "Return JSON with keys summary, feedback, guidance, draft."
+                        "Return JSON with keys summary, feedback, guidance, draft. "
+                        "The draft value must use short section headings on their own lines. "
+                        "In feedback and guidance, wrap one short key phrase in double asterisks for emphasis."
                     ),
                     user_prompt=self._build_llm_prompt(session, stage, answers, latest_input),
                 )
+                draft = self._ensure_structured_draft(
+                    stage,
+                    self._text_or(payload.get("draft"), self._fallback_draft(stage, answers, latest_input)),
+                )
                 return {
                     "summary": self._text_or(payload.get("summary"), self._fallback_summary(stage, answers, latest_input)),
-                    "feedback": self._text_or(payload.get("feedback"), self._fallback_feedback(stage)),
-                    "guidance": self._text_or(payload.get("guidance"), self.prioritization_service.focus_guidance(stage.focus)),
-                    "draft": self._text_or(payload.get("draft"), self._fallback_draft(stage, answers, latest_input)),
+                    "feedback": self._ensure_key_emphasis(
+                        self._text_or(payload.get("feedback"), self._fallback_feedback(stage))
+                    ),
+                    "guidance": self._ensure_key_emphasis(
+                        self._text_or(payload.get("guidance"), self.prioritization_service.focus_guidance(stage.focus))
+                    ),
+                    "draft": draft,
                 }
             except Exception:
                 pass
@@ -417,7 +431,7 @@ class DialogueService:
             "summary": self._fallback_summary(stage, answers, latest_input),
             "feedback": self._fallback_feedback(stage),
             "guidance": self.prioritization_service.focus_guidance(stage.focus),
-            "draft": self._fallback_draft(stage, answers, latest_input),
+            "draft": self._ensure_structured_draft(stage, self._fallback_draft(stage, answers, latest_input)),
         }
 
     def _build_llm_prompt(
@@ -446,6 +460,10 @@ class DialogueService:
             f"Initial idea: {session.state_snapshot.get('initial_idea', '')}\n"
             f"Current stage: Stage {stage.index} {stage.label}\n"
             f"Stage purpose: {stage.reason}\n"
+            f"Draft format:\n{self._build_draft_format_instruction(stage)}\n"
+            "Feedback and next step emphasis:\n"
+            "In feedback and guidance, mark one important phrase with **double asterisks**. "
+            "Do not bold whole paragraphs.\n"
             f"Teacher input:\n{teacher_input or '- None'}\n"
             f"Previous stage content:\n{previous_text}"
         )
@@ -459,35 +477,116 @@ class DialogueService:
 
     def _fallback_feedback(self, stage: SessionStage) -> str:
         mapping = {
-            FocusArea.PROBLEM_FRAMING: "Keep narrowing the problem until it is observable and researchable.",
-            FocusArea.ACTION_DESIGN: "Make the first-round action concrete enough to run in a real class soon.",
-            FocusArea.OBSERVATION_EVIDENCE: "Keep the evidence plan manageable but specific.",
-            FocusArea.REFLECTION_ITERATION: "Separate confirmed gains, unresolved issues, and next-step revisions.",
+            FocusArea.PROBLEM_FRAMING: "Keep narrowing the problem until **it is observable and researchable**.",
+            FocusArea.ACTION_DESIGN: "Make **the first-round action concrete enough** to run in a real class soon.",
+            FocusArea.OBSERVATION_EVIDENCE: "Keep **the evidence plan manageable but specific**.",
+            FocusArea.REFLECTION_ITERATION: "Separate **confirmed gains, unresolved issues, and next-step revisions**.",
         }
         return mapping[stage.focus]
 
     def _fallback_draft(self, stage: SessionStage, answers: list[str], latest_input: str | None) -> str:
         points = self._collect_points(answers, latest_input)
-        defaults = {
+        chosen = points[:3] if points else self._default_draft_points(stage)
+        return self._build_structured_draft(stage, [self._teacher_sentence(item) for item in chosen if item.strip()])
+
+    def _build_draft_format_instruction(self, stage: SessionStage) -> str:
+        headings = ", ".join(f"{heading}:" for heading in self._draft_headings(stage))
+        return (
+            f"Use these headings when they fit: {headings}\n"
+            "Put each heading on its own line, followed by one to three concise sentences. "
+            "Do not use markdown bullets or numbered lists in the draft."
+        )
+
+    def _ensure_structured_draft(self, stage: SessionStage, draft: str) -> str:
+        cleaned = re.sub(r"\n{3,}", "\n\n", draft.strip())
+        if self._has_structured_headings(cleaned):
+            return cleaned
+        sentences = self._split_sentences(cleaned)
+        sentences.extend(self._teacher_sentence(item) for item in self._default_draft_points(stage))
+        return self._build_structured_draft(stage, self._dedupe_sentences(sentences))
+
+    def _build_structured_draft(self, stage: SessionStage, sentences: list[str]) -> str:
+        headings = self._draft_headings(stage)
+        blocks = []
+        for heading, sentence in zip(headings, sentences):
+            if sentence.strip():
+                blocks.append(f"{heading}:\n{sentence.strip()}")
+        return "\n\n".join(blocks).strip()
+
+    def _draft_headings(self, stage: SessionStage) -> list[str]:
+        mapping = {
+            FocusArea.PROBLEM_FRAMING: [
+                "Classroom Problem",
+                "Learner Group",
+                "Desired Early Change",
+            ],
+            FocusArea.ACTION_DESIGN: [
+                "Planned Action",
+                "Implementation Details",
+                "Roles and Timing",
+            ],
+            FocusArea.OBSERVATION_EVIDENCE: [
+                "Evidence Sources",
+                "Observation Focus",
+                "How Evidence Will Be Used",
+            ],
+            FocusArea.REFLECTION_ITERATION: [
+                "What Worked",
+                "What Needs Adjustment",
+                "Next Cycle Decision",
+            ],
+        }
+        return mapping[stage.focus]
+
+    def _default_draft_points(self, stage: SessionStage) -> list[str]:
+        mapping = {
             FocusArea.PROBLEM_FRAMING: [
                 "The classroom problem still needs to be clarified.",
                 "The teacher wants to narrow the problem to one visible classroom change.",
+                "The first improvement target should be concrete enough to observe in class.",
             ],
             FocusArea.ACTION_DESIGN: [
                 "The teacher will try a focused classroom action.",
                 "The first trial will be scheduled in one specific class and time slot.",
+                "The action should name what the teacher and learners will each do.",
             ],
             FocusArea.OBSERVATION_EVIDENCE: [
                 "The teacher will collect evidence from classroom observations and learner responses.",
                 "The teacher will record the most visible changes during implementation.",
+                "The evidence should be simple enough to gather during the first cycle.",
             ],
             FocusArea.REFLECTION_ITERATION: [
                 "The teacher will reflect on what worked and what still needs adjustment.",
                 "The next cycle will keep the strongest actions and revise weaker points.",
+                "The next decision should be based on visible evidence from the classroom.",
             ],
         }
-        chosen = points[:3] if points else defaults[stage.focus]
-        return " ".join(self._teacher_sentence(item) for item in chosen if item.strip())
+        return mapping[stage.focus]
+
+    def _has_structured_headings(self, draft: str) -> bool:
+        headings = re.findall(r"(?m)^[A-Za-z][A-Za-z0-9 /&()'-]{1,54}:$", draft)
+        return len(headings) >= 2
+
+    def _split_sentences(self, text: str) -> list[str]:
+        cleaned = re.sub(r"\s+", " ", text.strip())
+        if not cleaned:
+            return []
+        return [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?])\s+", cleaned)
+            if sentence.strip()
+        ]
+
+    def _dedupe_sentences(self, sentences: list[str]) -> list[str]:
+        seen: set[str] = set()
+        deduped = []
+        for sentence in sentences:
+            key = re.sub(r"\W+", "", sentence).lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(sentence)
+        return deduped
 
     def _apply_manual_stage_update(
         self,
@@ -581,8 +680,12 @@ class DialogueService:
         if lines and heading.match(lines[0]):
             lines.pop(0)
         cleaned = "\n".join(lines).strip()
-        cleaned = re.split(r"\n\s*(?:System Feedback:|Current Questions:)\s*\n", cleaned, maxsplit=1)[0]
-        cleaned = re.sub(r"^Working Draft:\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.split(
+            r"\n\s*(?:System Feedback:|Question and Answer Record:|Current Questions:)\s*\n",
+            cleaned,
+            maxsplit=1,
+        )[0]
+        cleaned = re.sub(r"\s*Working Draft:\s*", "\n", cleaned, count=1, flags=re.IGNORECASE)
         return re.sub(r"\n{3,}", "\n\n", cleaned.strip())
 
     def _current_stage_body(self, session: ResearchSession, stage: SessionStage) -> str:
@@ -624,12 +727,28 @@ class DialogueService:
             draft = ""
         return draft.strip(), guidance
 
+    def _compose_qa_record(self, stage: SessionStage) -> str:
+        lines = []
+        for index, answer in enumerate(stage.latest_answers, start=1):
+            cleaned_answer = answer.strip()
+            if not cleaned_answer:
+                continue
+            question = stage.questions[index - 1] if index - 1 < len(stage.questions) else "Follow-up response"
+            lines.append(f"Q{index}: {question.strip()}")
+            lines.append(f"A{index}: {cleaned_answer}")
+        if stage.latest_input and stage.latest_input.strip():
+            note_index = len(stage.latest_answers) + 1
+            lines.append(f"Q{note_index}: Additional user input")
+            lines.append(f"A{note_index}: {stage.latest_input.strip()}")
+        return "\n".join(lines).strip()
+
     def _build_stage_guidance(
         self,
         session: ResearchSession,
         stage: SessionStage,
         base_guidance: str,
     ) -> str:
+        emphasized_guidance = self._ensure_key_emphasis(base_guidance)
         next_stage = self._next_non_deleted_stage(session, stage.index)
         if next_stage is None:
             decision = "You can keep refining this stage, or confirm it to finish the CAR sequence."
@@ -638,7 +757,17 @@ class DialogueService:
                 f"You can keep refining this stage, or confirm or skip it to move into "
                 f"Stage {next_stage.index}: {next_stage.label}."
             )
-        return f"{base_guidance} {decision}".strip()
+        return f"{emphasized_guidance} {decision}".strip()
+
+    def _ensure_key_emphasis(self, text: str) -> str:
+        cleaned = text.strip()
+        if not cleaned or "**" in cleaned:
+            return cleaned
+        match = re.search(r"[A-Za-z0-9][^.!?]{12,160}[.!?]", cleaned)
+        if match is None:
+            return cleaned
+        phrase = match.group(0).strip()
+        return cleaned.replace(phrase, f"**{phrase}**", 1)
 
     def _build_turn_message(
         self,
@@ -647,12 +776,12 @@ class DialogueService:
         outdated_count: int,
     ) -> str:
         sections = [
-            f"Stage {stage.index} feedback: {stage.feedback}",
-            f"Next step: {stage.guidance}",
+            f"Feedback:\nStage {stage.index}: {stage.feedback}",
+            f"Next Step:\n{stage.guidance}",
         ]
         if outdated_count:
             sections.append(
-                f"{outdated_count} later stage(s) are now marked outdated and should be reviewed."
+                f"Review Needed:\n{outdated_count} later stage(s) are now marked outdated and should be reviewed."
             )
         return "\n\n".join(section for section in sections if section)
 

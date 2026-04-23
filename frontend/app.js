@@ -7,6 +7,7 @@ const state = {
   currentQuestions: [],
   currentRoundLabel: "",
   isComplete: false,
+  isLoading: false,
   documentDrafts: {},
   nextStepDrafts: {},
 };
@@ -23,6 +24,7 @@ const regenerateStageButton = document.getElementById("regenerate-stage-button")
 const documentTitleEl = document.getElementById("document-title");
 const combinedDocumentEl = document.getElementById("combined-document");
 const saveDocumentButton = document.getElementById("save-document-button");
+const sendButton = document.getElementById("send-button");
 
 chatForm.addEventListener("submit", handleChatSubmit);
 chatInput.addEventListener("input", autoGrowComposer);
@@ -38,6 +40,7 @@ renderMeta();
 
 async function handleChatSubmit(event) {
   event.preventDefault();
+  if (state.isLoading) return;
   const message = chatInput.value.trim();
   if (!message) return;
 
@@ -65,7 +68,7 @@ async function handleChatSubmit(event) {
     return;
   }
 
-  const parsed = parseUserReply(message);
+  const parsed = parseUserReply(message, state.currentQuestions.length);
   await stageRequest(
     `/dialogue/sessions/${state.sessionId}/stages/${activeStage.index}/turn`,
     {
@@ -76,11 +79,13 @@ async function handleChatSubmit(event) {
         latest_input: parsed.latestInput,
       }),
     },
-    { includeQuestions: true },
+    { stageChoicePrompt: true },
   );
 }
 
 async function createSession(initialIdea) {
+  const thinkingBubble = appendThinkingBubble();
+  setLoading(true);
   try {
     const response = await fetch("/dialogue/sessions", {
       method: "POST",
@@ -94,9 +99,13 @@ async function createSession(initialIdea) {
     const data = await response.json();
     applySessionState(data);
     removeEmptyState();
+    removeThinkingBubble(thinkingBubble);
     appendBubble("ai", buildAssistantMessage(data, true));
   } catch (error) {
+    removeThinkingBubble(thinkingBubble);
     appendBubble("ai", `Failed to start the session: ${error.message}`);
+  } finally {
+    setLoading(false);
   }
 }
 
@@ -119,6 +128,8 @@ async function handleRegenerateCurrentStage() {
 async function saveCombinedDocument() {
   if (!state.sessionId) return;
   const content = buildCombinedDocumentPayload();
+  const thinkingBubble = appendThinkingBubble();
+  setLoading(true);
   try {
     const response = await fetch(`/dialogue/sessions/${state.sessionId}/document/save`, {
       method: "POST",
@@ -131,9 +142,13 @@ async function saveCombinedDocument() {
     }
     const data = await response.json();
     applySessionState(data);
+    removeThinkingBubble(thinkingBubble);
     appendBubble("ai", buildAssistantMessage(data));
   } catch (error) {
+    removeThinkingBubble(thinkingBubble);
     appendBubble("ai", `Document save failed: ${error.message}`);
+  } finally {
+    setLoading(false);
   }
 }
 
@@ -150,6 +165,8 @@ async function activateStage(stageIndex) {
 }
 
 async function stageRequest(url, options, extra = {}) {
+  const thinkingBubble = appendThinkingBubble();
+  setLoading(true);
   try {
     const response = await fetch(url, options);
     if (!response.ok) {
@@ -158,9 +175,17 @@ async function stageRequest(url, options, extra = {}) {
     }
     const data = await response.json();
     applySessionState(data);
+    removeThinkingBubble(thinkingBubble);
     appendBubble("ai", buildAssistantMessage(data, extra.includeQuestions === true));
+    if (extra.stageChoicePrompt) {
+      const choiceMessage = buildStageChoiceMessage();
+      if (choiceMessage) appendBubble("ai", choiceMessage);
+    }
   } catch (error) {
+    removeThinkingBubble(thinkingBubble);
     appendBubble("ai", `Action failed: ${error.message}`);
+  } finally {
+    setLoading(false);
   }
 }
 
@@ -197,9 +222,10 @@ function renderMeta() {
   questionChipEl.textContent = formatQuestions(state.currentQuestions);
 
   const activeStage = getActiveStage();
-  confirmStageButton.disabled = !activeStage || !activeStage.can_confirm;
-  regenerateStageButton.disabled = !activeStage || !activeStage.can_regenerate;
-  saveDocumentButton.disabled = !state.sessionId;
+  confirmStageButton.disabled = state.isLoading || !activeStage || !activeStage.can_confirm;
+  regenerateStageButton.disabled = state.isLoading || !activeStage || !activeStage.can_regenerate;
+  saveDocumentButton.disabled = state.isLoading || !state.sessionId;
+  sendButton.disabled = state.isLoading;
 }
 
 function renderStagePlan() {
@@ -262,7 +288,7 @@ function renderDocument() {
         <section class="doc-section ${editable ? "" : "is-locked"}">
           <h3>Stage ${stage.index}: ${escapeHtml(stage.label)}</h3>
           <div class="doc-edit-grid">
-            <div class="doc-edit-card">
+            <div class="doc-edit-card doc-edit-card-draft">
               <p class="doc-edit-label">Working Draft</p>
               <div
                 class="doc-body ${editable ? "" : "is-readonly"}"
@@ -272,17 +298,6 @@ function renderDocument() {
                 contenteditable="${editable ? "true" : "false"}"
                 spellcheck="false"
               >${formatEditableText(body)}</div>
-            </div>
-            <div class="doc-edit-card">
-              <p class="doc-edit-label">Next Step</p>
-              <div
-                class="doc-body doc-body-compact ${editable ? "" : "is-readonly"}"
-                data-stage-index="${stage.index}"
-                data-field="guidance"
-                data-placeholder="Describe the next move for this stage."
-                contenteditable="${editable ? "true" : "false"}"
-                spellcheck="false"
-              >${formatEditableText(state.nextStepDrafts[stage.index] || "")}</div>
             </div>
           </div>
           ${renderStageSupport(stage)}
@@ -305,12 +320,7 @@ function handleDocumentInput(event) {
   const body = event.target.closest(".doc-body[data-stage-index]");
   if (!body) return;
   const stageIndex = Number(body.dataset.stageIndex);
-  const field = body.dataset.field;
   const text = normalizeEditableText(body.innerText);
-  if (field === "guidance") {
-    state.nextStepDrafts[stageIndex] = text;
-    return;
-  }
   state.documentDrafts[stageIndex] = text;
 }
 
@@ -319,14 +329,17 @@ function buildCombinedDocumentPayload() {
     .filter((stage) => stage.status !== "deleted")
     .map((stage) => {
       const body = (state.documentDrafts[stage.index] || "").trim();
-      const nextStep = (state.nextStepDrafts[stage.index] || "").trim();
       const lines = [
         `Stage ${stage.index}: ${stage.label}`,
         "Working Draft:",
-        body || "This stage still needs more detail.",
+        stripInlineMarkers(body) || "This stage still needs more detail.",
       ];
-      if (nextStep) {
-        lines.push("", "Next Step:", nextStep);
+      if (stage.feedback) {
+        lines.push("", "System Feedback:", stripInlineMarkers(stage.feedback));
+      }
+      const qaRecord = buildQaText(stage);
+      if (qaRecord) {
+        lines.push("", "Question and Answer Record:", qaRecord);
       }
       return lines.join("\n");
     })
@@ -346,39 +359,113 @@ function buildAssistantMessage(data, includeQuestions = false) {
   return sections.filter(Boolean).join("\n\n");
 }
 
+function buildStageChoiceMessage() {
+  const activeStage = getActiveStage();
+  if (!activeStage || !activeStage.needs_confirmation) return "";
+
+  const nextStage = getNextVisibleStage(activeStage.index);
+  const followUps = state.currentQuestions.length
+    ? `\n\nIf you want to continue this stage, answer one of these follow-up questions:\n${formatQuestions(state.currentQuestions, true)}`
+    : "";
+
+  if (!nextStage) {
+    return (
+      `Stage ${activeStage.index} now has enough content to confirm.\n\n` +
+      "Do you want to keep refining this stage, or confirm it to finish the CAR sequence?" +
+      followUps
+    );
+  }
+
+  return (
+    `Stage ${activeStage.index} now has enough content to confirm.\n\n` +
+    `Do you want to continue with related questions in the current stage, or confirm it and start ` +
+    `Stage ${nextStage.index}: ${nextStage.label}?` +
+    followUps +
+    "\n\nTo move on, click Confirm."
+  );
+}
+
 function renderStageSupport(stage) {
   const blocks = [];
 
+  const qaRecord = renderQaRecord(stage);
+  if (qaRecord) {
+    blocks.push(`
+      <div class="doc-support-block doc-support-dialogue">
+        <p class="doc-support-title">Q&A Record</p>
+        <div class="doc-support-copy qa-list">${qaRecord}</div>
+      </div>
+    `);
+  }
+
   if (stage.feedback) {
     blocks.push(`
-      <div class="doc-support-block">
+      <div class="doc-support-block doc-support-feedback">
         <p class="doc-support-title">System Feedback</p>
-        <p class="doc-support-copy">${escapeHtml(stage.feedback)}</p>
-      </div>
-    `);
-  }
-
-  if (stage.guidance) {
-    blocks.push(`
-      <div class="doc-support-block">
-        <p class="doc-support-title">Next Step</p>
-        <p class="doc-support-copy">${escapeHtml(stage.guidance)}</p>
-      </div>
-    `);
-  }
-
-  if (Array.isArray(stage.questions) && stage.questions.length) {
-    blocks.push(`
-      <div class="doc-support-block">
-        <p class="doc-support-title">If You Continue This Stage</p>
-        <ol class="doc-question-list">
-          ${stage.questions.map((question) => `<li>${escapeHtml(question)}</li>`).join("")}
-        </ol>
+        <p class="doc-support-copy">${formatStructuredText(stage.feedback)}</p>
       </div>
     `);
   }
 
   return blocks.join("");
+}
+
+function renderQaRecord(stage) {
+  const rows = buildQaRows(stage);
+  if (!rows.length) return "";
+  return rows
+    .map(
+      (row) =>
+        `<div class="qa-row"><p class="qa-question"><span>${escapeHtml(row.questionLabel)}</span>${formatStructuredText(row.question)}</p><p class="qa-answer"><span>${escapeHtml(row.answerLabel)}</span>${formatStructuredText(row.answer)}</p></div>`,
+    )
+    .join("");
+}
+
+function buildQaText(stage) {
+  return buildQaRows(stage)
+    .map((row) => `${row.questionLabel}: ${stripInlineMarkers(row.question)}\n${row.answerLabel}: ${stripInlineMarkers(row.answer)}`)
+    .join("\n");
+}
+
+function buildQaRows(stage) {
+  const questions = Array.isArray(stage.questions) ? stage.questions : [];
+  const answers = normalizeQaAnswers(stage.latest_answers, questions.length);
+  const rows = answers
+    .map((answer, index) => {
+      const cleanedAnswer = String(answer || "").trim();
+      if (!cleanedAnswer) return null;
+      return {
+        questionLabel: `Q${index + 1}`,
+        question: questions[index] || "Follow-up response",
+        answerLabel: `A${index + 1}`,
+        answer: cleanedAnswer,
+      };
+    })
+    .filter(Boolean);
+
+  const latestInput = String(stage.latest_input || "").trim();
+  if (latestInput) {
+    const index = rows.length + 1;
+    rows.push({
+      questionLabel: `Q${index}`,
+      question: "Additional user input",
+      answerLabel: `A${index}`,
+      answer: latestInput,
+    });
+  }
+  return rows;
+}
+
+function normalizeQaAnswers(rawAnswers, expectedAnswerCount = 0) {
+  const rawItems = Array.isArray(rawAnswers)
+    ? rawAnswers.map((answer) => String(answer || "").trim()).filter(Boolean)
+    : [];
+  if (rawItems.length === 1 && expectedAnswerCount > 1) {
+    const numberedAnswers = splitNumberedAnswerBlocks(rawItems[0]);
+    if (numberedAnswers.length > 1) return numberedAnswers;
+  }
+
+  return rawItems.map(stripLeadingAnswerNumber).filter(Boolean);
 }
 
 function buildStageBadges(stage) {
@@ -415,17 +502,58 @@ function extractStageBody(stage) {
   return normalized || "";
 }
 
-function parseUserReply(rawMessage) {
-  const blocks = rawMessage
+function parseUserReply(rawMessage, expectedAnswerCount = 0) {
+  const message = String(rawMessage || "").trim();
+  let blocks = message
     .split(/\n{2,}/)
-    .map((item) => item.trim())
+    .map(stripLeadingAnswerNumber)
     .filter(Boolean);
-  if (blocks.length <= 1) return { answers: [rawMessage.trim()], latestInput: null };
-  if (blocks.length === 2) return { answers: blocks, latestInput: null };
+
+  if (blocks.length <= 1) {
+    const numberedBlocks = splitNumberedAnswerBlocks(message);
+    if (numberedBlocks.length > 1) blocks = numberedBlocks;
+  }
+
+  if (blocks.length <= 1) return { answers: [message], latestInput: null };
+
+  const answerLimit = expectedAnswerCount > 0 ? expectedAnswerCount : 2;
+  if (blocks.length <= answerLimit) return { answers: blocks, latestInput: null };
+
   return {
-    answers: blocks.slice(0, 2),
-    latestInput: blocks.slice(2).join("\n\n"),
+    answers: blocks.slice(0, answerLimit),
+    latestInput: blocks.slice(answerLimit).join("\n\n"),
   };
+}
+
+function splitNumberedAnswerBlocks(rawMessage) {
+  const message = String(rawMessage || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+  if (!message) return [];
+
+  const markers = Array.from(message.matchAll(/(?:^|\n)\s*(\d+)\s*[\.:)\uFF1A\u3001]\s*/g));
+  if (markers.length < 2) return [];
+
+  const numbers = markers.map((marker) => Number(marker[1]));
+  const startsAtOneAndSequential = numbers.every((number, index) => number === index + 1);
+  if (!startsAtOneAndSequential) return [];
+
+  return markers
+    .map((marker, index) => {
+      const start = Number(marker.index) + marker[0].length;
+      const end = index + 1 < markers.length ? Number(markers[index + 1].index) : message.length;
+      return message.slice(start, end);
+    })
+    .map(stripLeadingAnswerNumber)
+    .filter(Boolean);
+}
+
+function stripLeadingAnswerNumber(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^\d+\s*[\.:)\uFF1A\u3001]\s*/, "")
+    .trim();
 }
 
 function parseStageCommand(message) {
@@ -450,7 +578,46 @@ function formatQuestions(questions, withLineBreak = false) {
 
 function formatEditableText(text) {
   if (!text) return "";
-  return escapeHtml(text).replace(/\n/g, "<br>");
+  return formatStructuredText(text);
+}
+
+function formatStructuredText(text) {
+  if (!text) return "";
+  return String(text)
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map(formatStructuredLine)
+    .join("<br>");
+}
+
+function formatStructuredLine(line) {
+  const raw = String(line || "");
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+
+  const headingOnly = trimmed.match(/^([A-Za-z][A-Za-z0-9 /&()'-]{1,54}:)$/);
+  if (headingOnly) {
+    return `<strong class="text-subheading">${escapeHtml(headingOnly[1])}</strong>`;
+  }
+
+  const labelWithBody = trimmed.match(/^([A-Za-z][A-Za-z0-9 /&()'-]{1,38}:)\s+(.+)$/);
+  if (labelWithBody) {
+    return `<strong class="text-subheading">${escapeHtml(labelWithBody[1])}</strong> ${formatInlineMarkup(labelWithBody[2])}`;
+  }
+
+  return formatInlineMarkup(raw);
+}
+
+function formatInlineMarkup(value) {
+  return escapeHtml(value).replace(
+    /\*\*([^*]+)\*\*/g,
+    '<strong class="text-key">$1</strong>',
+  );
+}
+
+function stripInlineMarkers(value) {
+  return String(value || "").replace(/\*\*([^*]+)\*\*/g, "$1");
 }
 
 function normalizeEditableText(text) {
@@ -469,14 +636,45 @@ function getStage(stageIndex) {
   return state.stages.find((stage) => stage.index === stageIndex) || null;
 }
 
+function getNextVisibleStage(stageIndex) {
+  return state.stages.find((stage) => stage.index > stageIndex && stage.status !== "deleted") || null;
+}
+
 function appendBubble(role, content) {
   removeEmptyState();
   const template = document.getElementById("bubble-template");
   const node = template.content.firstElementChild.cloneNode(true);
   node.classList.add(role === "user" ? "user" : "ai");
-  node.querySelector(".bubble").textContent = content;
+  node.querySelector(".bubble").innerHTML = formatStructuredText(content);
   chatFeed.appendChild(node);
   chatFeed.scrollTop = chatFeed.scrollHeight;
+  return node;
+}
+
+function appendThinkingBubble() {
+  removeEmptyState();
+  const template = document.getElementById("bubble-template");
+  const node = template.content.firstElementChild.cloneNode(true);
+  node.classList.add("ai", "is-thinking");
+  node.querySelector(".bubble").innerHTML = `
+    <span class="thinking-label">AI is thinking</span>
+    <span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+  `;
+  chatFeed.appendChild(node);
+  chatFeed.scrollTop = chatFeed.scrollHeight;
+  return node;
+}
+
+function removeThinkingBubble(node) {
+  if (node && node.parentNode) node.remove();
+}
+
+function setLoading(isLoading) {
+  state.isLoading = isLoading;
+  chatInput.disabled = isLoading;
+  sendButton.disabled = isLoading;
+  chatForm.classList.toggle("is-loading", isLoading);
+  renderMeta();
 }
 
 function removeEmptyState() {

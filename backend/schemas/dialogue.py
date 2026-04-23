@@ -52,6 +52,8 @@ class DialogueStageResponse(BaseModel):
     summary: str | None = None
     feedback: str | None = None
     guidance: str | None = None
+    latest_answers: list[str] = Field(default_factory=list)
+    latest_input: str | None = None
     document: DialogueDocumentResponse | None = None
 
 
