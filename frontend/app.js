@@ -48,6 +48,9 @@ async function handleChatSubmit(event) {
   const message = chatInput.value.trim();
   if (!message) return;
 
+  if (state.sessionId) {
+    removeReplaceableBubble("context-update");
+  }
   appendBubble("user", message);
   clearComposer();
 
@@ -173,7 +176,7 @@ async function deleteStage(stageIndex) {
 async function activateStage(stageIndex) {
   await stageRequest(`/dialogue/sessions/${state.sessionId}/stages/${stageIndex}/activate`, {
     method: "POST",
-  }, { includeQuestions: true });
+  }, { includeQuestions: true, replaceKey: "context-update" });
 }
 
 async function handleCidaToggle() {
@@ -200,7 +203,7 @@ async function handleCidaToggle() {
     const data = await response.json();
     applySessionState(data);
     removeThinkingBubble(thinkingBubble);
-    appendBubble("ai", buildAssistantMessage(data, true));
+    appendBubble("ai", buildAssistantMessage(data, true), { replaceKey: "context-update" });
   } catch (error) {
     state.cidaEnabled = previous;
     cidaToggleEl.checked = previous;
@@ -223,7 +226,9 @@ async function stageRequest(url, options, extra = {}) {
     const data = await response.json();
     applySessionState(data);
     removeThinkingBubble(thinkingBubble);
-    appendBubble("ai", buildAssistantMessage(data, extra.includeQuestions === true));
+    appendBubble("ai", buildAssistantMessage(data, extra.includeQuestions === true), {
+      replaceKey: extra.replaceKey,
+    });
     if (extra.stageChoicePrompt) {
       const choiceMessage = buildStageChoiceMessage();
       if (choiceMessage) appendBubble("ai", choiceMessage);
@@ -799,15 +804,27 @@ function getNextVisibleStage(stageIndex) {
   return state.stages.find((stage) => stage.index > stageIndex && stage.status !== "deleted") || null;
 }
 
-function appendBubble(role, content) {
+function appendBubble(role, content, options = {}) {
   removeEmptyState();
+  if (options.replaceKey) {
+    removeReplaceableBubble(options.replaceKey);
+  }
   const template = document.getElementById("bubble-template");
   const node = template.content.firstElementChild.cloneNode(true);
   node.classList.add(role === "user" ? "user" : "ai");
+  if (options.replaceKey) {
+    node.dataset.replaceKey = options.replaceKey;
+    node.classList.add("is-replaceable");
+  }
   node.querySelector(".bubble").innerHTML = formatStructuredText(content);
   chatFeed.appendChild(node);
   chatFeed.scrollTop = chatFeed.scrollHeight;
   return node;
+}
+
+function removeReplaceableBubble(replaceKey) {
+  const existing = chatFeed.querySelector(`.bubble-row[data-replace-key="${replaceKey}"]`);
+  if (existing) existing.remove();
 }
 
 function appendThinkingBubble() {
