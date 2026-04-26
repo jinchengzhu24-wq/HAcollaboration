@@ -17,6 +17,10 @@ class DialogueDocumentEditRequest(BaseModel):
     content: str
 
 
+class DialogueRegenerateRequest(BaseModel):
+    content: str | None = None
+
+
 class DialogueCombinedDocumentEditRequest(BaseModel):
     content: str
 

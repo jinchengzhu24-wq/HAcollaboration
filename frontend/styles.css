@@ -629,6 +629,13 @@ button:disabled {
   border: 1px solid rgba(200, 212, 229, 0.72);
 }
 
+.doc-global-support {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(200, 212, 229, 0.72);
+}
+
 .doc-support-feedback {
   background: #f4f1ff;
   border-color: #d8cef6;

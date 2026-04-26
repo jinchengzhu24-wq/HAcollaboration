@@ -52,6 +52,10 @@ async function handleChatSubmit(event) {
   clearComposer();
 
   if (!state.sessionId) {
+    if (isPreSessionSmallTalk(message)) {
+      appendBubble("ai", buildPreSessionReply());
+      return;
+    }
     await createSession(message);
     return;
   }
@@ -125,8 +129,11 @@ async function handleConfirmCurrentStage() {
 async function handleRegenerateCurrentStage() {
   const activeStage = getActiveStage();
   if (!activeStage) return;
+  const currentDraft = state.documentDrafts[activeStage.index] || "";
   await stageRequest(`/dialogue/sessions/${state.sessionId}/stages/${activeStage.index}/regenerate`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: currentDraft }),
   }, { includeQuestions: true });
 }
 
@@ -370,8 +377,9 @@ function renderDocument() {
     return;
   }
 
-  combinedDocumentEl.innerHTML = visibleStages
-    .map((stage) => {
+  combinedDocumentEl.innerHTML = [
+    renderTopCidaSupport(),
+    ...visibleStages.map((stage) => {
       const body = state.documentDrafts[stage.index] || "";
       const editable = stage.status !== "locked";
       const placeholder = editable
@@ -396,7 +404,9 @@ function renderDocument() {
           ${renderStageSupport(stage)}
         </section>
       `;
-    })
+    }),
+  ]
+    .filter(Boolean)
     .join("");
 }
 
@@ -481,16 +491,6 @@ function buildStageChoiceMessage() {
 function renderStageSupport(stage) {
   const blocks = [];
 
-  const cidaGuidance = renderCidaGuidance(stage);
-  if (cidaGuidance) {
-    blocks.push(`
-      <div class="doc-support-block doc-support-cida">
-        <p class="doc-support-title">CIDA Support</p>
-        <div class="doc-support-copy cida-list">${cidaGuidance}</div>
-      </div>
-    `);
-  }
-
   const qaRecord = renderQaRecord(stage);
   if (qaRecord) {
     blocks.push(`
@@ -513,7 +513,21 @@ function renderStageSupport(stage) {
   return blocks.join("");
 }
 
+function renderTopCidaSupport() {
+  if (!state.cidaEnabled) return "";
+  const activeStage = getActiveStage();
+  const cidaGuidance = renderCidaGuidance(activeStage);
+  if (!cidaGuidance) return "";
+  return `
+    <section class="doc-global-support doc-support-cida">
+      <p class="doc-support-title">CIDA Support</p>
+      <div class="doc-support-copy cida-list">${cidaGuidance}</div>
+    </section>
+  `;
+}
+
 function renderCidaGuidance(stage) {
+  if (!stage) return "";
   const guidance = Array.isArray(stage.cida_guidance) ? stage.cida_guidance : [];
   if (!guidance.length) return "";
   return guidance
@@ -699,7 +713,7 @@ function formatEditableText(text) {
 
 function formatStructuredText(text) {
   if (!text) return "";
-  return String(text)
+  return collapseRepeatedHeadingLines(String(text))
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .split("\n")
@@ -737,11 +751,40 @@ function stripInlineMarkers(value) {
 }
 
 function normalizeEditableText(text) {
-  return String(text || "")
+  return collapseRepeatedHeadingLines(String(text || ""))
     .replace(/\u00a0/g, " ")
     .replace(/\r/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function collapseRepeatedHeadingLines(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const collapsed = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    const headingMatch = trimmed.match(/^([A-Za-z][A-Za-z0-9 /&()'-]{1,54}:)$/);
+    if (headingMatch) {
+      const heading = headingMatch[1];
+      let nextIndex = index + 1;
+      while (nextIndex < lines.length && !lines[nextIndex].trim()) nextIndex += 1;
+      if (nextIndex < lines.length) {
+        const nextLine = lines[nextIndex].trim();
+        if (
+          nextLine.toLowerCase().startsWith(heading.toLowerCase()) &&
+          nextLine.slice(heading.length).trim()
+        ) {
+          index = nextIndex;
+          continue;
+        }
+      }
+    }
+    collapsed.push(line);
+    index += 1;
+  }
+  return collapsed.join("\n").trim();
 }
 
 function getActiveStage() {
@@ -810,6 +853,46 @@ function clearComposer() {
 
 function safeJson(response) {
   return response.json().catch(() => null);
+}
+
+function isPreSessionSmallTalk(message) {
+  const compact = String(message || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s.!?,;:'"`~\uFF0C\u3002\uFF01\uFF1F\u3001\uFF1B\uFF1A]/g, "");
+  if (!compact) return true;
+
+  const smallTalk = new Set([
+    "hi",
+    "hello",
+    "hey",
+    "start",
+    "help",
+    "thanks",
+    "thankyou",
+    "\u4f60\u597d",
+    "\u60a8\u597d",
+    "\u55e8",
+    "\u54c8\u55bd",
+    "\u5f00\u59cb",
+    "\u5e2e\u52a9",
+    "\u8c22\u8c22",
+    "\u5728\u5417",
+    "\u600e\u4e48\u7528",
+    "\u5982\u4f55\u4f7f\u7528",
+    "\u4f60\u80fd\u505a\u4ec0\u4e48",
+    "\u53ef\u4ee5\u505a\u4ec0\u4e48",
+  ]);
+  if (smallTalk.has(compact)) return true;
+
+  return /^(whatcanyoudo|howdoiusethis|howtouse|canhelp)$/.test(compact);
+}
+
+function buildPreSessionReply() {
+  return (
+    "Hi. Tell me one classroom challenge or research idea, and I will help turn it into a CAR plan.\n\n" +
+    "For example: My Grade 7 students give very short answers during reading discussions."
+  );
 }
 
 function escapeHtml(value) {

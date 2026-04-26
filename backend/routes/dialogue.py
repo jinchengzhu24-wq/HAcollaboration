@@ -8,6 +8,7 @@ from backend.schemas.dialogue import (
     DialogueCombinedDocumentEditRequest,
     DialogueCreateRequest,
     DialogueDocumentEditRequest,
+    DialogueRegenerateRequest,
     DialogueDocumentResponse,
     DialogueSessionResponse,
     DialogueStageResponse,
@@ -119,10 +120,18 @@ def review_stage(session_id: str, stage_index: int) -> DialogueSessionResponse:
 
 
 @router.post("/sessions/{session_id}/stages/{stage_index}/regenerate", response_model=DialogueSessionResponse)
-def regenerate_stage(session_id: str, stage_index: int) -> DialogueSessionResponse:
+def regenerate_stage(
+    session_id: str,
+    stage_index: int,
+    payload: DialogueRegenerateRequest | None = None,
+) -> DialogueSessionResponse:
     session = _get_session_or_404(session_id)
     try:
-        message = dialogue_service.regenerate_stage(session, stage_index)
+        message = dialogue_service.regenerate_stage(
+            session,
+            stage_index,
+            payload.content if payload is not None else None,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     dialogue_repository.save(session)

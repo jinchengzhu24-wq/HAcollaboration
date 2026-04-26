@@ -35,13 +35,20 @@ class DialogueService:
         teacher_id: str = "local_teacher",
         cida_enabled: bool = False,
     ) -> ResearchSession:
+        initial_idea = initial_idea.strip()
+        session_start = self._generate_session_start(initial_idea, cida_enabled)
+        stage_one_questions = list(session_start["stage_one_questions"])
+        if cida_enabled:
+            stage_one_questions.extend(self.cida_support_service.support_questions(FocusArea.PROBLEM_FRAMING))
         stages = [
             SessionStage(
                 index=index,
                 label=str(stage["label"]),
                 reason=str(stage["reason"]),
                 focus=stage["focus"],
-                questions=self._stage_questions(stage["focus"], cida_enabled),
+                questions=stage_one_questions
+                if index == 1
+                else self._stage_questions(stage["focus"], cida_enabled),
                 status=StageStatus.AVAILABLE if index == 1 else StageStatus.LOCKED,
                 visited=index == 1,
             )
@@ -56,20 +63,9 @@ class DialogueService:
             active_stage_index=1,
             latest_draft=None,
             state_snapshot={
-                "initial_idea": initial_idea.strip(),
+                "initial_idea": initial_idea,
                 "cida_enabled": cida_enabled,
-                "opening_message": (
-                    f"Starting point captured: {initial_idea.strip()}\n\n"
-                    "The workspace now shows all four CAR stages at once. "
-                    "Only the current stage can unlock the next one, but you can revisit any available stage at any time. "
-                    "Use `delete stage 2` in chat if you want to remove a stage entirely."
-                    + (
-                        "\n\nCIDA support is on, so each stage will also prompt for inquiry process, "
-                        "collective process, and technological support."
-                        if cida_enabled
-                        else ""
-                    )
-                ),
+                "opening_message": session_start["opening_message"],
             },
         )
 
@@ -81,7 +77,11 @@ class DialogueService:
         session.state_snapshot["cida_enabled"] = enabled
         for stage in session.stages:
             if stage.status != StageStatus.DELETED:
-                stage.questions = self._stage_questions(stage.focus, enabled)
+                stage.questions = self._stage_questions(
+                    stage.focus,
+                    enabled,
+                    initial_idea=str(session.state_snapshot.get("initial_idea", "")),
+                )
 
         if currently_enabled == enabled:
             return "CIDA support is already turned on." if enabled else "CIDA support is already turned off."
@@ -111,6 +111,113 @@ class DialogueService:
 
     def build_opening_message(self, session: ResearchSession) -> str:
         return str(session.state_snapshot.get("opening_message", ""))
+
+    def _generate_session_start(self, initial_idea: str, cida_enabled: bool) -> dict[str, str | list[str]]:
+        fallback = {
+            "opening_message": self._build_session_opening_message(initial_idea, cida_enabled),
+            "stage_one_questions": self._problem_framing_questions_for_initial_idea(initial_idea),
+        }
+        if self.deepseek_client is None:
+            return fallback
+
+        try:
+            system_prompt = (
+                "You are a warm, specific classroom action research facilitator. "
+                "Return JSON with keys opening_message and questions. "
+                "opening_message must be 2-4 concise conversational sentences that directly respond "
+                "to the teacher's specific first message. Avoid stock phrases and do not sound like a report. "
+                "questions must be an array of exactly two concrete Problem Framing questions. "
+                "Each question must connect to the teacher's topic and ask about observable classroom moments, "
+                "affected learners, or a visible early improvement. Use the same language as the teacher when practical. "
+                "Do not use markdown."
+            )
+            if cida_enabled:
+                system_prompt += (
+                    " CIDA mode is enabled, so the opening may briefly mention evidence, collaborators, "
+                    "or technology support, but keep the two questions focused on problem framing."
+                )
+            payload = self.deepseek_client.generate_json(
+                system_prompt=system_prompt,
+                user_prompt=(
+                    f"Teacher's first message:\n{initial_idea or 'No specific idea yet.'}\n\n"
+                    "Create the first assistant reply and the first two questions."
+                ),
+            )
+            return {
+                "opening_message": self._text_or(payload.get("opening_message"), fallback["opening_message"]),
+                "stage_one_questions": self._questions_or(payload.get("questions"), fallback["stage_one_questions"]),
+            }
+        except Exception:
+            return fallback
+
+    def _build_session_opening_message(self, initial_idea: str, cida_enabled: bool) -> str:
+        idea = self._clean_initial_idea(initial_idea)
+        focus = self._initial_idea_focus(idea)
+        acknowledgement = self._opening_acknowledgement(idea)
+        cida_note = (
+            "\n\nCIDA support is on, so I will also ask about evidence, collaborators, and technology support."
+            if cida_enabled
+            else ""
+        )
+        return (
+            f"{acknowledgement}\n\n"
+            f"Let's make this researchable: {focus}. "
+            "First we need to pin down where it appears, who is most affected, "
+            "and what early classroom change would show progress."
+            f"{cida_note}"
+        )
+
+    def _clean_initial_idea(self, initial_idea: str) -> str:
+        cleaned = re.sub(r"\s+", " ", initial_idea).strip()
+        if not cleaned:
+            return "the classroom situation you want to investigate"
+        if len(cleaned) <= 180:
+            return cleaned
+        return f"{cleaned[:177].rstrip()}..."
+
+    def _opening_acknowledgement(self, idea: str) -> str:
+        compact = re.sub(r"[\s.!?,;:'\"`~]+", "", idea).lower()
+        small_talk = {
+            "hi",
+            "hello",
+            "hey",
+            "start",
+            "\u4f60\u597d",
+            "\u60a8\u597d",
+            "\u55e8",
+            "\u54c8\u55bd",
+            "\u5f00\u59cb",
+            "\u5728\u5417",
+        }
+        if compact in small_talk:
+            return "Hi, I can help turn a classroom concern into an action research plan."
+        return f"That gives us a useful starting point: {idea}"
+
+    def _initial_idea_focus(self, initial_idea: str) -> str:
+        focus = initial_idea.strip()
+        replacements = (
+            r"^(?:i\s+want\s+to|i\s+would\s+like\s+to|i\s+need\s+to|i'?m\s+trying\s+to|my\s+goal\s+is\s+to)\s+",
+            r"^(?:help\s+me\s+|can\s+you\s+help\s+me\s+)",
+            r"^(?:research|study|investigate)\s+",
+            r"^(?:\u6211\u60f3(?:\u8981)?(?:\u7814\u7a76|\u6539\u5584|\u63d0\u9ad8)?|\u5e2e\u6211|\u8bf7\u5e2e\u6211)\s*",
+            r"^(?:\u7814\u7a76|\u6539\u5584|\u63d0\u9ad8)\s*",
+        )
+        for pattern in replacements:
+            focus = re.sub(pattern, "", focus, count=1, flags=re.IGNORECASE).strip()
+        focus = re.sub(r"\s+", " ", focus).strip(" .")
+        if not focus:
+            return "this classroom concern"
+        if focus[:1].isupper() and not focus[:2].isupper():
+            focus = f"{focus[0].lower()}{focus[1:]}"
+        if re.match(
+            r"^(?:improve|increase|reduce|develop|strengthen|support|encourage|help|raise|build)\b",
+            focus,
+            flags=re.IGNORECASE,
+        ):
+            focus = f"the need to {focus}"
+        if len(focus) > 120:
+            return f"{focus[:117].rstrip()}..."
+        return focus
 
     def build_combined_document(self, session: ResearchSession) -> str:
         sections = []
@@ -151,11 +258,31 @@ class DialogueService:
             return []
         return active_stage.questions
 
-    def _stage_questions(self, focus_area: FocusArea, cida_enabled: bool) -> list[str]:
-        questions = list(self.prioritization_service.default_questions(focus_area))
+    def _stage_questions(
+        self,
+        focus_area: FocusArea,
+        cida_enabled: bool,
+        initial_idea: str | None = None,
+    ) -> list[str]:
+        if focus_area == FocusArea.PROBLEM_FRAMING and initial_idea and initial_idea.strip():
+            questions = self._problem_framing_questions_for_initial_idea(initial_idea)
+        else:
+            questions = list(self.prioritization_service.default_questions(focus_area))
         if cida_enabled:
             questions.extend(self.cida_support_service.support_questions(focus_area))
         return questions
+
+    def _problem_framing_questions_for_initial_idea(self, initial_idea: str) -> list[str]:
+        focus = self._initial_idea_focus(self._clean_initial_idea(initial_idea))
+        return [
+            (
+                f"Which lesson moment makes this issue most visible: {focus}? "
+                "What do students or the teacher do in that moment?"
+            ),
+            (
+                "Which learners are most affected by this issue, and what small early change would show progress?"
+            ),
+        ]
 
     def get_current_round_label(self, session: ResearchSession) -> str:
         active_stage = self.get_active_stage(session)
@@ -302,10 +429,23 @@ class DialogueService:
         stage.is_outdated = False
         return f"Stage {stage.index} marked as up to date."
 
-    def regenerate_stage(self, session: ResearchSession, stage_index: int) -> str:
+    def regenerate_stage(
+        self,
+        session: ResearchSession,
+        stage_index: int,
+        workspace_content: str | None = None,
+    ) -> str:
         stage = self.get_stage(session, stage_index)
         if stage.status in {StageStatus.LOCKED, StageStatus.DELETED}:
             raise ValueError("This stage cannot be regenerated.")
+        if workspace_content is not None:
+            current_body = self._current_stage_body(session, stage)
+            workspace_body = self._collapse_repeated_heading_lines(
+                self._normalize_stage_body(workspace_content, session, stage)
+            )
+            if self._documents_are_different(current_body, workspace_body):
+                return self._regenerate_feedback_for_workspace_edit(session, stage, current_body, workspace_body)
+
         answers = list(stage.latest_answers)
         latest_input = stage.latest_input
         if not answers and not latest_input:
@@ -320,6 +460,82 @@ class DialogueService:
             stage.needs_confirmation = False
             stage.is_outdated = False
         return f"Stage {stage.index} regenerated. {message}"
+
+    def _regenerate_feedback_for_workspace_edit(
+        self,
+        session: ResearchSession,
+        stage: SessionStage,
+        previous_body: str,
+        workspace_body: str,
+    ) -> str:
+        if not workspace_body.strip():
+            raise ValueError("The workspace draft cannot be empty.")
+
+        change_summary = self._summarize_document_revision(previous_body, workspace_body)
+        stage.feedback = self._generate_feedback_for_workspace_body(session, stage, workspace_body)
+        updated = self.document_service.save_text_revision(
+            session_id=session.session_id,
+            stage_index=stage.index,
+            stage_label=stage.label,
+            content=self._compose_stage_document_text(session, stage, workspace_body),
+        )
+        stage.document = self._merge_document_metadata(stage, updated)
+        stage.draft = workspace_body
+        stage.summary = self._manual_summary(stage, workspace_body)
+        stage.is_outdated = False
+        stage.visited = True
+        session.active_stage_index = stage.index
+        session.latest_draft = workspace_body
+        if stage.status in {StageStatus.COMPLETED, StageStatus.SKIPPED}:
+            stage.status = StageStatus.COMPLETED
+            stage.needs_confirmation = False
+        else:
+            stage.status = StageStatus.AVAILABLE
+            stage.needs_confirmation = True
+
+        outdated_count = self._mark_following_stages_outdated(session, stage.index)
+        message = (
+            f"I noticed you changed the workspace draft: {change_summary} "
+            "I kept your draft as written and regenerated the feedback only."
+        )
+        if outdated_count:
+            message = f"{message} {outdated_count} later stage(s) are now marked outdated."
+        return f"{message}\n\nUpdated Feedback:\n{stage.feedback}"
+
+    def _generate_feedback_for_workspace_body(
+        self,
+        session: ResearchSession,
+        stage: SessionStage,
+        workspace_body: str,
+    ) -> str:
+        fallback = self._fallback_feedback(session, stage, [workspace_body], None)
+        if self.deepseek_client is None:
+            return fallback
+
+        try:
+            payload = self.deepseek_client.generate_json(
+                system_prompt=(
+                    "You are reviewing a teacher-edited classroom action research draft. "
+                    "Return JSON with key feedback only. Do not rewrite the draft. "
+                    "The feedback must use exactly three short headings on separate lines: "
+                    "What Changed:, Make It Stronger:, Example To Add:. "
+                    "Under each heading, write one or two specific sentences grounded in the edited draft. "
+                    "Include one concrete example sentence or classroom evidence example the teacher can adapt. "
+                    "Mark one important phrase with **double asterisks** and do not use markdown bullets."
+                ),
+                user_prompt=(
+                    f"Project title: {session.project_title}\n"
+                    f"Current stage: Stage {stage.index} {stage.label}\n"
+                    f"Stage purpose: {stage.reason}\n"
+                    f"Teacher-edited draft:\n{workspace_body}"
+                ),
+            )
+            return self._ensure_structured_feedback(
+                self._text_or(payload.get("feedback"), fallback),
+                fallback,
+            )
+        except Exception:
+            return fallback
 
     def edit_stage_document(self, session: ResearchSession, stage_index: int, content: str) -> str:
         stage = self.get_stage(session, stage_index)
@@ -454,6 +670,9 @@ class DialogueService:
                     "You are a concise classroom action research assistant. "
                     "Return JSON with keys summary, feedback, guidance, draft. "
                     "The draft value must use short section headings on their own lines. "
+                    "The feedback value must be more substantial than a single sentence: use 3 short headings "
+                    "on their own lines, include concrete advice under each heading, and include one example sentence "
+                    "or classroom example the teacher could adapt. "
                     "In feedback and guidance, wrap one short key phrase in double asterisks for emphasis."
                 )
                 if self.is_cida_enabled(session):
@@ -473,10 +692,12 @@ class DialogueService:
                         self._text_or(payload.get("draft"), self._fallback_draft(stage, answers, latest_input)),
                     ),
                 )
+                fallback_feedback = self._fallback_feedback(session, stage, answers, latest_input)
                 return {
                     "summary": self._text_or(payload.get("summary"), self._fallback_summary(stage, answers, latest_input)),
-                    "feedback": self._ensure_key_emphasis(
-                        self._text_or(payload.get("feedback"), self._fallback_feedback(session, stage))
+                    "feedback": self._ensure_structured_feedback(
+                        self._text_or(payload.get("feedback"), fallback_feedback),
+                        fallback_feedback,
                     ),
                     "guidance": self._ensure_key_emphasis(
                         self._text_or(payload.get("guidance"), self._base_guidance(session, stage))
@@ -488,7 +709,7 @@ class DialogueService:
 
         return {
             "summary": self._fallback_summary(stage, answers, latest_input),
-            "feedback": self._fallback_feedback(session, stage),
+            "feedback": self._fallback_feedback(session, stage, answers, latest_input),
             "guidance": self._base_guidance(session, stage),
             "draft": self._append_cida_support_notes(
                 session,
@@ -529,9 +750,13 @@ class DialogueService:
             f"Current stage: Stage {stage.index} {stage.label}\n"
             f"Stage purpose: {stage.reason}\n"
             f"Draft format:\n{self._build_draft_format_instruction(session, stage)}\n"
-            "Feedback and next step emphasis:\n"
-            "In feedback and guidance, mark one important phrase with **double asterisks**. "
-            "Do not bold whole paragraphs.\n"
+            "Feedback format:\n"
+            "Write feedback with exactly three short headings on separate lines: What Works:, Make It Sharper:, "
+            "Example To Add:. Under each heading, write one or two specific sentences grounded in the teacher input. "
+            "The Example To Add section must include a concrete sentence, classroom moment, evidence example, or wording "
+            "the teacher can adapt. Mark one important phrase with **double asterisks** and do not bold whole paragraphs.\n"
+            "Guidance format:\n"
+            "Write one concise next-step paragraph. Mark one important phrase with **double asterisks**.\n"
             f"{cida_text}"
             f"Teacher input:\n{teacher_input or '- None'}\n"
             f"Previous stage content:\n{previous_text}"
@@ -544,20 +769,73 @@ class DialogueService:
         lead = " ".join(points[:2])
         return f"{stage.label}: {lead}"
 
-    def _fallback_feedback(self, session: ResearchSession, stage: SessionStage) -> str:
+    def _fallback_feedback(
+        self,
+        session: ResearchSession,
+        stage: SessionStage,
+        answers: list[str] | None = None,
+        latest_input: str | None = None,
+    ) -> str:
+        focus = self._feedback_focus(session, answers or [], latest_input)
         mapping = {
-            FocusArea.PROBLEM_FRAMING: "Keep narrowing the problem until **it is observable and researchable**.",
-            FocusArea.ACTION_DESIGN: "Make **the first-round action concrete enough** to run in a real class soon.",
-            FocusArea.OBSERVATION_EVIDENCE: "Keep **the evidence plan manageable but specific**.",
-            FocusArea.REFLECTION_ITERATION: "Separate **confirmed gains, unresolved issues, and next-step revisions**.",
+            FocusArea.PROBLEM_FRAMING: (
+                "What Works:\n"
+                f"You have a usable starting point around **{focus}**. It is close to a classroom problem because it can be seen in specific lesson moments.\n\n"
+                "Make It Sharper:\n"
+                "Name the learner group, the lesson situation, and the behavior that shows the problem. This will keep the inquiry from becoming too broad.\n\n"
+                "Example To Add:\n"
+                "Try a sentence like: In grade seven reading discussions, this issue appears when students answer with one short phrase and do not build on a peer's idea."
+            ),
+            FocusArea.ACTION_DESIGN: (
+                "What Works:\n"
+                f"The action is connected to **{focus}**, so it can stay practical instead of becoming a general teaching improvement goal.\n\n"
+                "Make It Sharper:\n"
+                "Specify what the teacher will do first, what students will do in response, and how long the first trial will last.\n\n"
+                "Example To Add:\n"
+                "Try a sentence like: For two reading lessons, the teacher will use one prepared follow-up prompt after each short answer and ask students to add evidence from the text."
+            ),
+            FocusArea.OBSERVATION_EVIDENCE: (
+                "What Works:\n"
+                f"The plan can collect evidence around **{focus}** without turning the inquiry into a large assessment project.\n\n"
+                "Make It Sharper:\n"
+                "Choose evidence that is easy to capture during class, such as response length, number of follow-up turns, exit tickets, or short observation notes.\n\n"
+                "Example To Add:\n"
+                "Try recording three sample student responses before and after the action, then compare whether they include reasons, evidence, or peer references."
+            ),
+            FocusArea.REFLECTION_ITERATION: (
+                "What Works:\n"
+                f"The reflection can now look back at **{focus}** and separate what actually changed from what still feels uncertain.\n\n"
+                "Make It Sharper:\n"
+                "Sort the evidence into confirmed gains, weak signals, and unresolved problems before deciding the next cycle.\n\n"
+                "Example To Add:\n"
+                "Try a sentence like: The strongest gain was longer student responses, but peer-to-peer follow-up still needs a more explicit routine in the next cycle."
+            ),
         }
         feedback = mapping[stage.focus]
         if self.is_cida_enabled(session):
             feedback = (
-                f"{feedback} Use the CIDA lens to connect data inquiry, collaborator input, "
-                "and system support."
+                f"{feedback}\n\nCIDA Lens:\n"
+                "Also name one data source, one collaborator who can comment on the pattern, and one technology support that can preserve the evidence."
             )
         return feedback
+
+    def _feedback_focus(self, session: ResearchSession, answers: list[str], latest_input: str | None) -> str:
+        points = self._collect_points(answers, latest_input)
+        if points:
+            focus = points[0]
+        else:
+            focus = str(session.state_snapshot.get("initial_idea", "") or "the classroom issue")
+        focus = self._clean_initial_idea(focus)
+        focus = self._initial_idea_focus(focus)
+        return self._clip_text(focus, 90)
+
+    def _ensure_structured_feedback(self, feedback: str, fallback: str) -> str:
+        cleaned = re.sub(r"\n{3,}", "\n\n", feedback.strip())
+        has_headings = len(re.findall(r"(?m)^[A-Za-z][A-Za-z0-9 /&()'-]{1,54}:$", cleaned)) >= 2
+        has_example = re.search(r"(?i)\bexample\b|try a sentence|for example", cleaned) is not None
+        if has_headings and has_example:
+            return self._ensure_key_emphasis(cleaned)
+        return fallback
 
     def _fallback_draft(self, stage: SessionStage, answers: list[str], latest_input: str | None) -> str:
         points = self._collect_points(answers, latest_input)
@@ -605,11 +883,36 @@ class DialogueService:
 
     def _ensure_structured_draft(self, stage: SessionStage, draft: str) -> str:
         cleaned = re.sub(r"\n{3,}", "\n\n", draft.strip())
-        if self._has_structured_headings(cleaned):
+        cleaned = self._collapse_repeated_heading_lines(cleaned)
+        if self._has_structured_stage_lines(stage, cleaned):
             return cleaned
         sentences = self._split_sentences(cleaned)
         sentences.extend(self._teacher_sentence(item) for item in self._default_draft_points(stage))
-        return self._build_structured_draft(stage, self._dedupe_sentences(sentences))
+        return self._collapse_repeated_heading_lines(
+            self._build_structured_draft(stage, self._dedupe_sentences(sentences))
+        )
+
+    def _collapse_repeated_heading_lines(self, draft: str) -> str:
+        lines = draft.splitlines()
+        collapsed = []
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            stripped = line.strip()
+            heading_match = re.match(r"^([A-Za-z][A-Za-z0-9 /&()'-]{1,54}:)$", stripped)
+            if heading_match:
+                heading = heading_match.group(1)
+                next_index = index + 1
+                while next_index < len(lines) and not lines[next_index].strip():
+                    next_index += 1
+                if next_index < len(lines):
+                    next_line = lines[next_index].strip()
+                    if next_line.lower().startswith(heading.lower()) and next_line[len(heading):].strip():
+                        index = next_index
+                        continue
+            collapsed.append(line)
+            index += 1
+        return "\n".join(collapsed).strip()
 
     def _build_structured_draft(self, stage: SessionStage, sentences: list[str]) -> str:
         headings = self._draft_headings(stage)
@@ -672,6 +975,16 @@ class DialogueService:
     def _has_structured_headings(self, draft: str) -> bool:
         headings = re.findall(r"(?m)^[A-Za-z][A-Za-z0-9 /&()'-]{1,54}:$", draft)
         return len(headings) >= 2
+
+    def _has_structured_stage_lines(self, stage: SessionStage, draft: str) -> bool:
+        headings = {f"{heading}:".lower() for heading in self._draft_headings(stage)}
+        found = set()
+        for line in draft.splitlines():
+            stripped = line.strip().lower()
+            for heading in headings:
+                if stripped == heading or stripped.startswith(heading):
+                    found.add(heading)
+        return len(found) >= 2
 
     def _split_sentences(self, text: str) -> list[str]:
         cleaned = re.sub(r"\s+", " ", text.strip())
@@ -1035,9 +1348,9 @@ class DialogueService:
         added = next((line for line in revised_lines if line not in original_set), "")
         removed = next((line for line in original_lines if line not in revised_set), "")
         if added:
-            return f"Added “{self._clip_text(added)}”."
+            return f'Added "{self._clip_text(added)}".'
         if removed:
-            return f"Reworked “{self._clip_text(removed)}”."
+            return f'Reworked "{self._clip_text(removed)}".'
         if SequenceMatcher(None, original_text, revised_text).ratio() < 0.7:
             return "Rewrote most of the section."
         return "Adjusted the wording in the section."
@@ -1074,3 +1387,22 @@ class DialogueService:
         if isinstance(value, str) and value.strip():
             return value.strip()
         return fallback
+
+    def _questions_or(self, value: Any, fallback: list[str]) -> list[str]:
+        if isinstance(value, list):
+            candidates = [str(item).strip() for item in value]
+        elif isinstance(value, str):
+            candidates = [item.strip() for item in re.split(r"\n+", value)]
+            if len([item for item in candidates if item]) < 2:
+                candidates = [item.strip() for item in re.findall("[^?\uFF1F]+[?\uFF1F]", value)]
+        else:
+            candidates = []
+
+        questions = []
+        for candidate in candidates:
+            cleaned = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", candidate).strip()
+            if len(cleaned) < 12:
+                continue
+            questions.append(cleaned)
+
+        return questions[:2] if len(questions) >= 2 else fallback
