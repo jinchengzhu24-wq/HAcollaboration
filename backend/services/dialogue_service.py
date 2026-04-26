@@ -8,6 +8,7 @@ from uuid import uuid4
 from backend.clients.deepseek_client import DeepSeekClient
 from backend.config import get_settings
 from backend.models.session import FocusArea, ResearchCycleStage, ResearchSession, SessionStage, StageStatus
+from backend.services.cida import CidaSupportService
 from backend.services.document_service import StageDocumentService
 from backend.services.prioritization import PrioritizationService
 
@@ -16,6 +17,7 @@ class DialogueService:
     def __init__(self) -> None:
         settings = get_settings()
         self.prioritization_service = PrioritizationService()
+        self.cida_support_service = CidaSupportService()
         self.document_service = StageDocumentService()
         self.deepseek_client: DeepSeekClient | None = None
         if settings.deepseek_api_key:
@@ -31,6 +33,7 @@ class DialogueService:
         project_title: str,
         initial_idea: str,
         teacher_id: str = "local_teacher",
+        cida_enabled: bool = False,
     ) -> ResearchSession:
         stages = [
             SessionStage(
@@ -38,7 +41,7 @@ class DialogueService:
                 label=str(stage["label"]),
                 reason=str(stage["reason"]),
                 focus=stage["focus"],
-                questions=self.prioritization_service.default_questions(stage["focus"]),
+                questions=self._stage_questions(stage["focus"], cida_enabled),
                 status=StageStatus.AVAILABLE if index == 1 else StageStatus.LOCKED,
                 visited=index == 1,
             )
@@ -54,14 +57,54 @@ class DialogueService:
             latest_draft=None,
             state_snapshot={
                 "initial_idea": initial_idea.strip(),
+                "cida_enabled": cida_enabled,
                 "opening_message": (
                     f"Starting point captured: {initial_idea.strip()}\n\n"
                     "The workspace now shows all four CAR stages at once. "
                     "Only the current stage can unlock the next one, but you can revisit any available stage at any time. "
                     "Use `delete stage 2` in chat if you want to remove a stage entirely."
+                    + (
+                        "\n\nCIDA support is on, so each stage will also prompt for inquiry process, "
+                        "collective process, and technological support."
+                        if cida_enabled
+                        else ""
+                    )
                 ),
             },
         )
+
+    def is_cida_enabled(self, session: ResearchSession) -> bool:
+        return bool(session.state_snapshot.get("cida_enabled"))
+
+    def set_cida_mode(self, session: ResearchSession, enabled: bool) -> str:
+        currently_enabled = self.is_cida_enabled(session)
+        session.state_snapshot["cida_enabled"] = enabled
+        for stage in session.stages:
+            if stage.status != StageStatus.DELETED:
+                stage.questions = self._stage_questions(stage.focus, enabled)
+
+        if currently_enabled == enabled:
+            return "CIDA support is already turned on." if enabled else "CIDA support is already turned off."
+
+        affected_count = 0
+        for stage in session.stages:
+            if stage.status in {StageStatus.DELETED, StageStatus.LOCKED}:
+                continue
+            if stage.document or stage.summary or stage.draft:
+                if not stage.is_outdated:
+                    affected_count += 1
+                stage.is_outdated = True
+
+        mode = "on" if enabled else "off"
+        message = f"CIDA support turned {mode}. Stage prompts have been updated."
+        if affected_count:
+            message = f"{message} {affected_count} existing stage(s) are marked outdated and can be regenerated."
+        return message
+
+    def get_cida_guidance(self, session: ResearchSession, stage: SessionStage) -> list[str]:
+        if not self.is_cida_enabled(session):
+            return []
+        return self.cida_support_service.support_questions(stage.focus)
 
     def llm_status_text(self) -> str:
         return "DeepSeek connected" if self.deepseek_client is not None else "Fallback mode"
@@ -107,6 +150,12 @@ class DialogueService:
         if active_stage is None or active_stage.status == StageStatus.DELETED:
             return []
         return active_stage.questions
+
+    def _stage_questions(self, focus_area: FocusArea, cida_enabled: bool) -> list[str]:
+        questions = list(self.prioritization_service.default_questions(focus_area))
+        if cida_enabled:
+            questions.extend(self.cida_support_service.support_questions(focus_area))
+        return questions
 
     def get_current_round_label(self, session: ResearchSession) -> str:
         active_stage = self.get_active_stage(session)
@@ -376,7 +425,7 @@ class DialogueService:
         stage.guidance = self._build_stage_guidance(
             session,
             stage,
-            self.prioritization_service.focus_guidance(stage.focus),
+            self._base_guidance(session, stage),
         )
         stage.is_outdated = False
         if stage.status in {StageStatus.COMPLETED, StageStatus.SKIPPED}:
@@ -401,26 +450,36 @@ class DialogueService:
     ) -> dict[str, str]:
         if self.deepseek_client is not None:
             try:
+                system_prompt = (
+                    "You are a concise classroom action research assistant. "
+                    "Return JSON with keys summary, feedback, guidance, draft. "
+                    "The draft value must use short section headings on their own lines. "
+                    "In feedback and guidance, wrap one short key phrase in double asterisks for emphasis."
+                )
+                if self.is_cida_enabled(session):
+                    system_prompt += (
+                        " CIDA support is enabled: explicitly connect the draft, feedback, and guidance "
+                        "to inquiry process, collective process, and technological support."
+                    )
                 payload = self.deepseek_client.generate_json(
-                    system_prompt=(
-                        "You are a concise classroom action research assistant. "
-                        "Return JSON with keys summary, feedback, guidance, draft. "
-                        "The draft value must use short section headings on their own lines. "
-                        "In feedback and guidance, wrap one short key phrase in double asterisks for emphasis."
-                    ),
+                    system_prompt=system_prompt,
                     user_prompt=self._build_llm_prompt(session, stage, answers, latest_input),
                 )
-                draft = self._ensure_structured_draft(
+                draft = self._append_cida_support_notes(
+                    session,
                     stage,
-                    self._text_or(payload.get("draft"), self._fallback_draft(stage, answers, latest_input)),
+                    self._ensure_structured_draft(
+                        stage,
+                        self._text_or(payload.get("draft"), self._fallback_draft(stage, answers, latest_input)),
+                    ),
                 )
                 return {
                     "summary": self._text_or(payload.get("summary"), self._fallback_summary(stage, answers, latest_input)),
                     "feedback": self._ensure_key_emphasis(
-                        self._text_or(payload.get("feedback"), self._fallback_feedback(stage))
+                        self._text_or(payload.get("feedback"), self._fallback_feedback(session, stage))
                     ),
                     "guidance": self._ensure_key_emphasis(
-                        self._text_or(payload.get("guidance"), self.prioritization_service.focus_guidance(stage.focus))
+                        self._text_or(payload.get("guidance"), self._base_guidance(session, stage))
                     ),
                     "draft": draft,
                 }
@@ -429,9 +488,13 @@ class DialogueService:
 
         return {
             "summary": self._fallback_summary(stage, answers, latest_input),
-            "feedback": self._fallback_feedback(stage),
-            "guidance": self.prioritization_service.focus_guidance(stage.focus),
-            "draft": self._ensure_structured_draft(stage, self._fallback_draft(stage, answers, latest_input)),
+            "feedback": self._fallback_feedback(session, stage),
+            "guidance": self._base_guidance(session, stage),
+            "draft": self._append_cida_support_notes(
+                session,
+                stage,
+                self._ensure_structured_draft(stage, self._fallback_draft(stage, answers, latest_input)),
+            ),
         }
 
     def _build_llm_prompt(
@@ -455,15 +518,21 @@ class DialogueService:
         if latest_input:
             teacher_input = f"{teacher_input}\n- {latest_input}" if teacher_input else f"- {latest_input}"
         previous_text = "\n\n".join(previous_blocks) if previous_blocks else "None"
+        cida_text = (
+            f"CIDA support:\n{self._format_cida_support_prompt(stage)}\n"
+            if self.is_cida_enabled(session)
+            else ""
+        )
         return (
             f"Project title: {session.project_title}\n"
             f"Initial idea: {session.state_snapshot.get('initial_idea', '')}\n"
             f"Current stage: Stage {stage.index} {stage.label}\n"
             f"Stage purpose: {stage.reason}\n"
-            f"Draft format:\n{self._build_draft_format_instruction(stage)}\n"
+            f"Draft format:\n{self._build_draft_format_instruction(session, stage)}\n"
             "Feedback and next step emphasis:\n"
             "In feedback and guidance, mark one important phrase with **double asterisks**. "
             "Do not bold whole paragraphs.\n"
+            f"{cida_text}"
             f"Teacher input:\n{teacher_input or '- None'}\n"
             f"Previous stage content:\n{previous_text}"
         )
@@ -475,27 +544,64 @@ class DialogueService:
         lead = " ".join(points[:2])
         return f"{stage.label}: {lead}"
 
-    def _fallback_feedback(self, stage: SessionStage) -> str:
+    def _fallback_feedback(self, session: ResearchSession, stage: SessionStage) -> str:
         mapping = {
             FocusArea.PROBLEM_FRAMING: "Keep narrowing the problem until **it is observable and researchable**.",
             FocusArea.ACTION_DESIGN: "Make **the first-round action concrete enough** to run in a real class soon.",
             FocusArea.OBSERVATION_EVIDENCE: "Keep **the evidence plan manageable but specific**.",
             FocusArea.REFLECTION_ITERATION: "Separate **confirmed gains, unresolved issues, and next-step revisions**.",
         }
-        return mapping[stage.focus]
+        feedback = mapping[stage.focus]
+        if self.is_cida_enabled(session):
+            feedback = (
+                f"{feedback} Use the CIDA lens to connect data inquiry, collaborator input, "
+                "and system support."
+            )
+        return feedback
 
     def _fallback_draft(self, stage: SessionStage, answers: list[str], latest_input: str | None) -> str:
         points = self._collect_points(answers, latest_input)
         chosen = points[:3] if points else self._default_draft_points(stage)
         return self._build_structured_draft(stage, [self._teacher_sentence(item) for item in chosen if item.strip()])
 
-    def _build_draft_format_instruction(self, stage: SessionStage) -> str:
+    def _base_guidance(self, session: ResearchSession, stage: SessionStage) -> str:
+        guidance = self.prioritization_service.focus_guidance(stage.focus)
+        if self.is_cida_enabled(session):
+            guidance = (
+                f"{guidance} Add CIDA support by naming the data inquiry move, the collaboration move, "
+                "and the technology support the system should provide."
+            )
+        return guidance
+
+    def _format_cida_support_prompt(self, stage: SessionStage) -> str:
+        return "\n".join(f"- {item}" for item in self.cida_support_service.support_questions(stage.focus))
+
+    def _append_cida_support_notes(
+        self,
+        session: ResearchSession,
+        stage: SessionStage,
+        draft: str,
+    ) -> str:
+        if not self.is_cida_enabled(session):
+            return draft
+        if re.search(r"(?im)^CIDA Support Notes:\s*$", draft):
+            return draft
+        notes = self.cida_support_service.support_notes(stage.focus)
+        return f"{draft.strip()}\n\nCIDA Support Notes:\n{notes}".strip()
+
+    def _build_draft_format_instruction(self, session: ResearchSession, stage: SessionStage) -> str:
         headings = ", ".join(f"{heading}:" for heading in self._draft_headings(stage))
-        return (
+        instruction = (
             f"Use these headings when they fit: {headings}\n"
             "Put each heading on its own line, followed by one to three concise sentences. "
             "Do not use markdown bullets or numbered lists in the draft."
         )
+        if self.is_cida_enabled(session):
+            instruction += (
+                "\nAlso add a final heading named CIDA Support Notes: with one line each for "
+                "Inquiry process, Collective process, and Technological support."
+            )
+        return instruction
 
     def _ensure_structured_draft(self, stage: SessionStage, draft: str) -> str:
         cleaned = re.sub(r"\n{3,}", "\n\n", draft.strip())
@@ -599,7 +705,7 @@ class DialogueService:
         guidance = (guidance_override or "").strip() or self._build_stage_guidance(
             session,
             stage,
-            self.prioritization_service.focus_guidance(stage.focus),
+            self._base_guidance(session, stage),
         )
         stage.feedback = feedback
         stage.guidance = guidance

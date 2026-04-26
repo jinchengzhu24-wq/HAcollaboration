@@ -107,6 +107,95 @@ body {
   border-radius: 22px;
 }
 
+.header-controls {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.cida-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 11px;
+  border: 1px solid #d5dde8;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #374151;
+  box-shadow: 0 1px 2px rgba(29, 39, 54, 0.05);
+  font-size: 0.8rem;
+  font-weight: 650;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, color 140ms ease, transform 120ms ease;
+}
+
+.cida-toggle:hover {
+  transform: translateY(-1px);
+  border-color: #b9c5d6;
+  box-shadow: 0 6px 14px rgba(29, 39, 54, 0.08);
+}
+
+.cida-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cida-mode-icon {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 50%, #ffffff 0 2px, transparent 3px),
+    linear-gradient(135deg, #64748b, #94a3b8);
+  flex: 0 0 auto;
+  transition: background 140ms ease, transform 140ms ease;
+}
+
+.cida-mode-icon::before,
+.cida-mode-icon::after {
+  content: "";
+  position: absolute;
+  inset: 3px 7px;
+  background: #fff;
+  border-radius: 999px;
+}
+
+.cida-mode-icon::after {
+  inset: 7px 3px;
+}
+
+.cida-mode-label {
+  white-space: nowrap;
+}
+
+.cida-toggle.is-enabled,
+.cida-toggle:has(input:checked) {
+  background: #eef4ff;
+  border-color: #9bb7ff;
+  color: #1f4bb2;
+  box-shadow: 0 8px 18px rgba(44, 98, 223, 0.12);
+}
+
+.cida-toggle.is-enabled .cida-mode-icon,
+.cida-toggle:has(input:checked) .cida-mode-icon {
+  background:
+    radial-gradient(circle at 50% 50%, #ffffff 0 2px, transparent 3px),
+    linear-gradient(135deg, #2c62df, #22a06b);
+  transform: rotate(45deg);
+}
+
+.cida-toggle.is-disabled,
+.cida-toggle:has(input:disabled) {
+  opacity: 0.58;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .section-title {
   margin: 0 0 4px;
   color: var(--muted);
@@ -550,6 +639,11 @@ button:disabled {
   border-color: #bdd8ec;
 }
 
+.doc-support-cida {
+  background: #effaf4;
+  border-color: #b8ddc6;
+}
+
 .doc-support-title {
   margin: 0 0 4px;
   color: var(--muted);
@@ -569,6 +663,23 @@ button:disabled {
 .qa-list {
   display: grid;
   gap: 8px;
+}
+
+.cida-list {
+  display: grid;
+  gap: 6px;
+}
+
+.cida-list p {
+  margin: 0;
+}
+
+.cida-list span {
+  display: inline-block;
+  min-width: 132px;
+  margin-right: 6px;
+  color: #227144;
+  font-weight: 800;
 }
 
 .qa-row + .qa-row {
@@ -661,6 +772,11 @@ code {
 
   .question-chip {
     max-width: 100%;
+  }
+
+  .header-controls {
+    width: 100%;
+    justify-items: stretch;
   }
 
   .composer,

@@ -33,6 +33,65 @@ def test_car_stage_plan_is_returned_on_create() -> None:
     assert "Stage 4: Reflection and Iteration" in payload["combined_document"]
 
 
+def test_cida_mode_adds_support_prompts_on_create() -> None:
+    client = TestClient(app)
+
+    response = client.post(
+        "/dialogue/sessions",
+        json={
+            "initial_idea": "I want to improve questioning quality in reading lessons.",
+            "project_title": "Questioning Improvement",
+            "cida_enabled": True,
+        },
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    first_stage = payload["stages"][0]
+    assert payload["cida_enabled"] is True
+    assert len(first_stage["cida_guidance"]) == 3
+    assert any("Inquiry process" in question for question in payload["current_questions"])
+    assert "CIDA support is on" in payload["opening_message"]
+
+
+def test_cida_mode_can_be_toggled_for_an_existing_session() -> None:
+    client = TestClient(app)
+    session_id = _create_session(client)
+
+    toggle_response = client.post(
+        f"/dialogue/sessions/{session_id}/cida",
+        json={"enabled": True},
+    )
+    assert toggle_response.status_code == 200
+    toggle_payload = toggle_response.json()
+    assert toggle_payload["cida_enabled"] is True
+    assert len(toggle_payload["stages"][0]["cida_guidance"]) == 3
+    assert any("Technological support" in question for question in toggle_payload["current_questions"])
+
+    turn_response = client.post(
+        f"/dialogue/sessions/{session_id}/stages/1/turn",
+        json={
+            "answers": [
+                "Students often give short answers and the discussion stops too early.",
+                "I want to redesign the teacher's follow-up questions.",
+            ],
+            "latest_input": "The target group is grade seven reading classes.",
+        },
+    )
+    assert turn_response.status_code == 200
+    assert "CIDA Support Notes" in turn_response.json()["stages"][0]["draft"]
+
+    off_response = client.post(
+        f"/dialogue/sessions/{session_id}/cida",
+        json={"enabled": False},
+    )
+    assert off_response.status_code == 200
+    off_payload = off_response.json()
+    assert off_payload["cida_enabled"] is False
+    assert off_payload["stages"][0]["cida_guidance"] == []
+    assert off_payload["stages"][0]["is_outdated"] is True
+
+
 def test_locked_stage_requires_confirm_or_skip_before_unlock() -> None:
     client = TestClient(app)
     session_id = _create_session(client)

@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 from backend.models.session import StageStatus
 from backend.repositories.dialogue_repository import InMemoryDialogueRepository
 from backend.schemas.dialogue import (
+    DialogueCidaModeRequest,
     DialogueCombinedDocumentEditRequest,
     DialogueCreateRequest,
     DialogueDocumentEditRequest,
@@ -27,6 +28,7 @@ def create_dialogue_session(payload: DialogueCreateRequest) -> DialogueSessionRe
         project_title=project_title,
         initial_idea=payload.initial_idea,
         teacher_id=payload.teacher_id,
+        cida_enabled=payload.cida_enabled,
     )
     dialogue_repository.save(session)
     return _build_session_response(session)
@@ -36,6 +38,14 @@ def create_dialogue_session(payload: DialogueCreateRequest) -> DialogueSessionRe
 def get_dialogue_session(session_id: str) -> DialogueSessionResponse:
     session = _get_session_or_404(session_id)
     return _build_session_response(session)
+
+
+@router.post("/sessions/{session_id}/cida", response_model=DialogueSessionResponse)
+def set_cida_mode(session_id: str, payload: DialogueCidaModeRequest) -> DialogueSessionResponse:
+    session = _get_session_or_404(session_id)
+    message = dialogue_service.set_cida_mode(session, payload.enabled)
+    dialogue_repository.save(session)
+    return _build_session_response(session, message=message)
 
 
 @router.post("/sessions/{session_id}/stages/{stage_index}/activate", response_model=DialogueSessionResponse)
@@ -213,6 +223,7 @@ def _build_session_response(session, message: str | None = None) -> DialogueSess
         current_round_label=dialogue_service.get_current_round_label(session),
         current_questions=current_questions,
         active_stage_index=active_stage.index if active_stage is not None else None,
+        cida_enabled=dialogue_service.is_cida_enabled(session),
         is_complete=dialogue_service.is_complete(session),
         message=message,
         combined_document=dialogue_service.build_combined_document(session),
@@ -244,6 +255,7 @@ def _serialize_stage(session, stage) -> DialogueStageResponse:
         latest_answers=list(stage.latest_answers),
         latest_input=stage.latest_input,
         document=_serialize_document(stage.document, session.session_id),
+        cida_guidance=dialogue_service.get_cida_guidance(session, stage),
     )
 
 

@@ -6,6 +6,7 @@ const state = {
   activeStageIndex: null,
   currentQuestions: [],
   currentRoundLabel: "",
+  cidaEnabled: false,
   isComplete: false,
   isLoading: false,
   documentDrafts: {},
@@ -17,6 +18,8 @@ const chatInput = document.getElementById("chat-input");
 const chatFeed = document.getElementById("chat-feed");
 const stagePlanEl = document.getElementById("stage-plan");
 const questionChipEl = document.getElementById("question-chip");
+const cidaToggleEl = document.getElementById("cida-toggle");
+const cidaToggleLabelEl = cidaToggleEl.closest(".cida-toggle");
 const stageSummaryEl = document.getElementById("stage-summary");
 const activeStageLabelEl = document.getElementById("active-stage-label");
 const confirmStageButton = document.getElementById("confirm-stage-button");
@@ -28,6 +31,7 @@ const sendButton = document.getElementById("send-button");
 
 chatForm.addEventListener("submit", handleChatSubmit);
 chatInput.addEventListener("input", autoGrowComposer);
+cidaToggleEl.addEventListener("change", handleCidaToggle);
 stagePlanEl.addEventListener("click", handleStageListClick);
 combinedDocumentEl.addEventListener("input", handleDocumentInput);
 confirmStageButton.addEventListener("click", handleConfirmCurrentStage);
@@ -93,6 +97,7 @@ async function createSession(initialIdea) {
       body: JSON.stringify({
         initial_idea: initialIdea,
         project_title: null,
+        cida_enabled: state.cidaEnabled,
       }),
     });
     if (!response.ok) throw new Error("Could not create a session.");
@@ -164,6 +169,41 @@ async function activateStage(stageIndex) {
   }, { includeQuestions: true });
 }
 
+async function handleCidaToggle() {
+  const enabled = cidaToggleEl.checked;
+  if (!state.sessionId) {
+    state.cidaEnabled = enabled;
+    renderMeta();
+    return;
+  }
+
+  const previous = state.cidaEnabled;
+  const thinkingBubble = appendThinkingBubble();
+  setLoading(true);
+  try {
+    const response = await fetch(`/dialogue/sessions/${state.sessionId}/cida`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!response.ok) {
+      const payload = await safeJson(response);
+      throw new Error(payload?.detail || "Could not update CIDA support.");
+    }
+    const data = await response.json();
+    applySessionState(data);
+    removeThinkingBubble(thinkingBubble);
+    appendBubble("ai", buildAssistantMessage(data, true));
+  } catch (error) {
+    state.cidaEnabled = previous;
+    cidaToggleEl.checked = previous;
+    removeThinkingBubble(thinkingBubble);
+    appendBubble("ai", `CIDA update failed: ${error.message}`);
+  } finally {
+    setLoading(false);
+  }
+}
+
 async function stageRequest(url, options, extra = {}) {
   const thinkingBubble = appendThinkingBubble();
   setLoading(true);
@@ -197,6 +237,7 @@ function applySessionState(data) {
   state.activeStageIndex = data.active_stage_index;
   state.currentQuestions = Array.isArray(data.current_questions) ? data.current_questions : [];
   state.currentRoundLabel = data.current_round_label || "";
+  state.cidaEnabled = Boolean(data.cida_enabled);
   state.isComplete = Boolean(data.is_complete);
 
   const drafts = {};
@@ -214,18 +255,70 @@ function applySessionState(data) {
 }
 
 function renderMeta() {
+  const activeStage = getActiveStage();
+
   documentTitleEl.textContent = state.projectTitle || "Research document";
   stageSummaryEl.textContent = state.currentRoundLabel || "Start a session to load the stage map.";
   activeStageLabelEl.textContent = state.activeStageIndex
     ? `Active: Stage ${state.activeStageIndex}`
     : "No active stage";
-  questionChipEl.textContent = formatQuestions(state.currentQuestions);
+  questionChipEl.textContent = buildNextActionPrompt(activeStage);
+  cidaToggleEl.checked = state.cidaEnabled;
+  cidaToggleEl.disabled = state.isLoading;
+  cidaToggleLabelEl.classList.toggle("is-enabled", state.cidaEnabled);
+  cidaToggleLabelEl.classList.toggle("is-disabled", state.isLoading);
 
-  const activeStage = getActiveStage();
   confirmStageButton.disabled = state.isLoading || !activeStage || !activeStage.can_confirm;
   regenerateStageButton.disabled = state.isLoading || !activeStage || !activeStage.can_regenerate;
   saveDocumentButton.disabled = state.isLoading || !state.sessionId;
   sendButton.disabled = state.isLoading;
+}
+
+function buildNextActionPrompt(activeStage) {
+  if (state.isLoading) {
+    return "Working on your request. Review the workspace while the draft updates.";
+  }
+
+  if (!state.sessionId) {
+    return "Next: describe your classroom challenge or research idea in the chat.";
+  }
+
+  if (state.isComplete) {
+    return "Next: review the working document, edit anything needed, then save a copy.";
+  }
+
+  if (!activeStage) {
+    return "Next: choose an available stage from the research map to continue.";
+  }
+
+  if (activeStage.is_outdated) {
+    return `Next: review or regenerate Stage ${activeStage.index} because earlier changes may affect it.`;
+  }
+
+  if (activeStage.needs_confirmation && activeStage.can_confirm) {
+    return `Next: review Stage ${activeStage.index}, then click Confirm or keep refining it in chat.`;
+  }
+
+  if (activeStage.status === "locked") {
+    return "Next: confirm or skip earlier stages to unlock this stage.";
+  }
+
+  if (activeStage.status === "completed") {
+    return `Stage ${activeStage.index} is complete. Next: choose another available stage or edit the document.`;
+  }
+
+  if (activeStage.status === "skipped") {
+    return `Stage ${activeStage.index} is skipped. Next: choose another available stage or regenerate it.`;
+  }
+
+  if (state.currentQuestions.length) {
+    const cidaHint = state.cidaEnabled
+      ? " Include evidence, collaborators, and technology support for CIDA Mode."
+      : "";
+    return `Next: answer Stage ${activeStage.index}'s prompts in the chat to generate or revise the draft.${cidaHint}`;
+  }
+
+  return `Next: add details for Stage ${activeStage.index} in the chat or edit the working draft.`;
 }
 
 function renderStagePlan() {
@@ -388,6 +481,16 @@ function buildStageChoiceMessage() {
 function renderStageSupport(stage) {
   const blocks = [];
 
+  const cidaGuidance = renderCidaGuidance(stage);
+  if (cidaGuidance) {
+    blocks.push(`
+      <div class="doc-support-block doc-support-cida">
+        <p class="doc-support-title">CIDA Support</p>
+        <div class="doc-support-copy cida-list">${cidaGuidance}</div>
+      </div>
+    `);
+  }
+
   const qaRecord = renderQaRecord(stage);
   if (qaRecord) {
     blocks.push(`
@@ -408,6 +511,19 @@ function renderStageSupport(stage) {
   }
 
   return blocks.join("");
+}
+
+function renderCidaGuidance(stage) {
+  const guidance = Array.isArray(stage.cida_guidance) ? stage.cida_guidance : [];
+  if (!guidance.length) return "";
+  return guidance
+    .map((item) => {
+      const [label, ...rest] = String(item || "").split(":");
+      const copy = rest.join(":").trim();
+      if (!copy) return `<p>${formatStructuredText(item)}</p>`;
+      return `<p><span>${escapeHtml(label)}</span>${formatStructuredText(copy)}</p>`;
+    })
+    .join("");
 }
 
 function renderQaRecord(stage) {
@@ -571,7 +687,7 @@ function parseStageCommand(message) {
 }
 
 function formatQuestions(questions, withLineBreak = false) {
-  if (!questions || !questions.length) return "No extra prompts for the current stage.";
+  if (!questions || !questions.length) return "Stage prompts will appear here when available.";
   const lines = questions.map((question, index) => `${index + 1}. ${question}`);
   return lines.join(withLineBreak ? "\n" : " | ");
 }
