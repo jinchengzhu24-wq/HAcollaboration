@@ -10,13 +10,13 @@ from backend.config import get_settings
 from backend.models.session import FocusArea, ResearchCycleStage, ResearchSession, SessionStage, StageStatus
 from backend.services.cida import CidaSupportService
 from backend.services.document_service import StageDocumentService
-from backend.services.prioritization import PrioritizationService
+from backend.services.car import CarService
 
 
 class DialogueService:
     def __init__(self) -> None:
         settings = get_settings()
-        self.prioritization_service = PrioritizationService()
+        self.car_service = CarService()
         self.cida_support_service = CidaSupportService()
         self.document_service = StageDocumentService()
         self.deepseek_client: DeepSeekClient | None = None
@@ -52,7 +52,7 @@ class DialogueService:
                 status=StageStatus.AVAILABLE if index == 1 else StageStatus.LOCKED,
                 visited=index == 1,
             )
-            for index, stage in enumerate(self.prioritization_service.build_car_stage_plan(), start=1)
+            for index, stage in enumerate(self.car_service.build_car_stage_plan(), start=1)
         ]
         return ResearchSession(
             session_id=str(uuid4()),
@@ -267,7 +267,7 @@ class DialogueService:
         if focus_area == FocusArea.PROBLEM_FRAMING and initial_idea and initial_idea.strip():
             questions = self._problem_framing_questions_for_initial_idea(initial_idea)
         else:
-            questions = list(self.prioritization_service.default_questions(focus_area))
+            questions = list(self.car_service.default_questions(focus_area))
         if cida_enabled:
             questions.extend(self.cida_support_service.support_questions(focus_area))
         return questions
@@ -843,7 +843,7 @@ class DialogueService:
         return self._build_structured_draft(stage, [self._teacher_sentence(item) for item in chosen if item.strip()])
 
     def _base_guidance(self, session: ResearchSession, stage: SessionStage) -> str:
-        guidance = self.prioritization_service.focus_guidance(stage.focus)
+        guidance = self.car_service.focus_guidance(stage.focus)
         if self.is_cida_enabled(session):
             guidance = (
                 f"{guidance} Add CIDA support by naming the data inquiry move, the collaboration move, "

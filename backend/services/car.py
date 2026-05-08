@@ -1,7 +1,7 @@
 from backend.models.session import FocusArea
 
 
-class PrioritizationService:
+class CarService:
     _FOCUS_LABELS = {
         FocusArea.PROBLEM_FRAMING: "Problem Framing",
         FocusArea.ACTION_DESIGN: "Action Design",
